@@ -12,8 +12,8 @@ const char* DEVICE_ID = "ESP32-001";
 // Boot button on GPIO0
 const int BUTTON_PIN = 0;
 
-// Double-tap timing (ms)
-const unsigned long DOUBLE_TAP_WINDOW = 400;
+// Multi-tap timing (ms)
+const unsigned long TAP_WINDOW = 400;
 const unsigned long DEBOUNCE_TIME = 50;
 
 WiFiClientSecure client;
@@ -95,8 +95,9 @@ void setup() {
     Serial.println("================================");
     Serial.println("ESP32 Salesforce IoT Device");
     Serial.println("================================");
-    Serial.println("Single tap = Single function");
-    Serial.println("Double tap = Double function");
+    Serial.println("Single tap = Send reading");
+    Serial.println("Double tap = Send reading");
+    Serial.println("Triple tap = Scan WiFi networks");
     Serial.println("================================");
 
     pinMode(BUTTON_PIN, INPUT_PULLUP);
@@ -125,9 +126,84 @@ void sendReading(const char* function) {
     }
 }
 
+void scanAndSendNetworks() {
+    Serial.println("\n--- Scanning WiFi Networks ---");
+
+    int numNetworks = WiFi.scanNetworks();
+    Serial.print("Found ");
+    Serial.print(numNetworks);
+    Serial.println(" networks");
+
+    // Build networks JSON array
+    String networks = "[";
+    for (int i = 0; i < numNetworks && i < 20; i++) {  // Limit to 20 networks
+        if (i > 0) networks += ",";
+        networks += "{\"ssid\":\"";
+        networks += WiFi.SSID(i);
+        networks += "\",\"rssi\":";
+        networks += WiFi.RSSI(i);
+        networks += ",\"channel\":";
+        networks += WiFi.channel(i);
+        networks += ",\"encryption\":\"";
+        switch (WiFi.encryptionType(i)) {
+            case WIFI_AUTH_OPEN: networks += "Open"; break;
+            case WIFI_AUTH_WEP: networks += "WEP"; break;
+            case WIFI_AUTH_WPA_PSK: networks += "WPA"; break;
+            case WIFI_AUTH_WPA2_PSK: networks += "WPA2"; break;
+            case WIFI_AUTH_WPA_WPA2_PSK: networks += "WPA/WPA2"; break;
+            case WIFI_AUTH_WPA2_ENTERPRISE: networks += "WPA2-Enterprise"; break;
+            default: networks += "Unknown"; break;
+        }
+        networks += "\"}";
+
+        Serial.print("  ");
+        Serial.print(WiFi.SSID(i));
+        Serial.print(" (");
+        Serial.print(WiFi.RSSI(i));
+        Serial.println(" dBm)");
+    }
+    networks += "]";
+
+    WiFi.scanDelete();
+
+    // Send to Salesforce
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("WiFi not connected");
+        return;
+    }
+
+    HTTPClient http;
+    client.setInsecure();
+    http.begin(client, SF_ENDPOINT);
+    http.addHeader("Content-Type", "application/json");
+
+    String payload = "{";
+    payload += "\"deviceId\":\"" + String(DEVICE_ID) + "\",";
+    payload += "\"function\":\"Scan\",";
+    payload += "\"networks\":" + networks + ",";
+    payload += "\"apiKey\":\"" + String(SF_API_KEY) + "\"";
+    payload += "}";
+
+    Serial.println("Sending network scan to Salesforce...");
+
+    int httpCode = http.POST(payload);
+
+    if (httpCode > 0) {
+        String response = http.getString();
+        Serial.print("Response (");
+        Serial.print(httpCode);
+        Serial.print("): ");
+        Serial.println(response);
+    } else {
+        Serial.print("HTTP Error: ");
+        Serial.println(http.errorToString(httpCode));
+    }
+    http.end();
+}
+
 void loop() {
     static unsigned long firstTapTime = 0;
-    static bool waitingForSecondTap = false;
+    static int tapCount = 0;
     static bool lastButtonState = HIGH;
     static unsigned long lastDebounceTime = 0;
 
@@ -149,13 +225,19 @@ void loop() {
             buttonState = reading;
 
             if (buttonState == LOW) {
-                if (waitingForSecondTap && (millis() - firstTapTime) < DOUBLE_TAP_WINDOW) {
-                    Serial.println("\n*** DOUBLE TAP! ***");
-                    waitingForSecondTap = false;
-                    sendReading("Double");
-                } else {
+                // Button pressed
+                if (tapCount == 0 || (millis() - firstTapTime) > TAP_WINDOW) {
+                    // First tap or timeout - start new sequence
+                    tapCount = 1;
                     firstTapTime = millis();
-                    waitingForSecondTap = true;
+                } else {
+                    // Additional tap within window
+                    tapCount++;
+                    if (tapCount >= 3) {
+                        Serial.println("\n*** TRIPLE TAP! ***");
+                        scanAndSendNetworks();
+                        tapCount = 0;
+                    }
                 }
             }
         }
@@ -163,10 +245,16 @@ void loop() {
 
     lastButtonState = reading;
 
-    if (waitingForSecondTap && (millis() - firstTapTime) >= DOUBLE_TAP_WINDOW) {
-        Serial.println("\n*** SINGLE TAP! ***");
-        waitingForSecondTap = false;
-        sendReading("Single");
+    // Check for timeout to trigger single or double tap
+    if (tapCount > 0 && (millis() - firstTapTime) >= TAP_WINDOW) {
+        if (tapCount == 1) {
+            Serial.println("\n*** SINGLE TAP! ***");
+            sendReading("Single");
+        } else if (tapCount == 2) {
+            Serial.println("\n*** DOUBLE TAP! ***");
+            sendReading("Double");
+        }
+        tapCount = 0;
     }
 
     delay(5);

@@ -34,6 +34,8 @@ global with sharing class SensorDataAPI {
                 String.valueOf(body.get('deviceId')) : 'unknown';
             reading.Function__c = body.containsKey('function') ?
                 String.valueOf(body.get('function')) : null;
+            reading.Networks__c = body.containsKey('networks') ?
+                JSON.serialize(body.get('networks')) : null;
             reading.Reading_Timestamp__c = DateTime.now();
 
             insert reading;

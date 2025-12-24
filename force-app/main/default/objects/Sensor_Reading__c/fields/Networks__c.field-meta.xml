@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Networks__c</fullName>
+    <label>Networks</label>
+    <type>LongTextArea</type>
+    <length>32768</length>
+    <visibleLines>5</visibleLines>
+    <required>false</required>
+    <description>JSON array of WiFi networks detected during a scan. Contains SSID, signal strength (RSSI), channel, and encryption type.</description>
+    <inlineHelpText>WiFi networks found during triple-tap scan</inlineHelpText>
+</CustomField>
