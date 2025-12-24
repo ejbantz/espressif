@@ -12,6 +12,9 @@ const char* DEVICE_ID = "ESP32-001";
 // Send interval (30 seconds)
 const unsigned long SEND_INTERVAL = 30000;
 
+// Boot button on GPIO0
+const int BUTTON_PIN = 0;
+
 WiFiClientSecure client;
 
 void connectWiFi() {
@@ -94,6 +97,9 @@ void setup() {
     Serial.println("ESP32 Salesforce IoT Device");
     Serial.println("================================");
 
+    // Setup button input (Boot button has external pull-up)
+    pinMode(BUTTON_PIN, INPUT_PULLUP);
+
     connectWiFi();
 
     if (WiFi.status() == WL_CONNECTED) {
@@ -105,8 +111,30 @@ void setup() {
     }
 }
 
+void sendReading() {
+    // Simulated sensor values (replace with real sensor readings)
+    float temp = 72.0 + (random(0, 100) / 10.0);
+    float humidity = 40.0 + (random(0, 200) / 10.0);
+
+    Serial.println("\n--- Sending Sensor Data ---");
+    Serial.print("Temperature: ");
+    Serial.print(temp);
+    Serial.println(" F");
+    Serial.print("Humidity: ");
+    Serial.print(humidity);
+    Serial.println(" %");
+
+    if (sendToSalesforce(temp, humidity)) {
+        Serial.println("Success!");
+    } else {
+        Serial.println("Failed to send");
+    }
+}
+
 void loop() {
     static unsigned long lastSend = 0;
+    static unsigned long lastButtonPress = 0;
+    static bool lastButtonState = HIGH;
 
     // Reconnect WiFi if needed
     if (WiFi.status() != WL_CONNECTED) {
@@ -114,28 +142,20 @@ void loop() {
         connectWiFi();
     }
 
+    // Check button press (active LOW, with debounce)
+    bool buttonState = digitalRead(BUTTON_PIN);
+    if (buttonState == LOW && lastButtonState == HIGH && (millis() - lastButtonPress > 500)) {
+        lastButtonPress = millis();
+        Serial.println("\n*** Button Pressed! ***");
+        sendReading();
+    }
+    lastButtonState = buttonState;
+
     // Send data every SEND_INTERVAL
     if (millis() - lastSend > SEND_INTERVAL) {
         lastSend = millis();
-
-        // Simulated sensor values (replace with real sensor readings)
-        float temp = 72.0 + (random(0, 100) / 10.0);
-        float humidity = 40.0 + (random(0, 200) / 10.0);
-
-        Serial.println("\n--- Sending Sensor Data ---");
-        Serial.print("Temperature: ");
-        Serial.print(temp);
-        Serial.println(" F");
-        Serial.print("Humidity: ");
-        Serial.print(humidity);
-        Serial.println(" %");
-
-        if (sendToSalesforce(temp, humidity)) {
-            Serial.println("Success!");
-        } else {
-            Serial.println("Failed to send");
-        }
+        sendReading();
     }
 
-    delay(100);
+    delay(10);
 }
