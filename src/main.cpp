@@ -9,11 +9,12 @@ const char* SF_ENDPOINT = "https://ejdev-dev-ed.develop.my.site.com/vforcesite/s
 const char* SF_API_KEY = "LawnMonitor2024SecretKey";
 const char* DEVICE_ID = "ESP32-001";
 
-// Send interval (30 seconds)
-const unsigned long SEND_INTERVAL = 30000;
-
 // Boot button on GPIO0
 const int BUTTON_PIN = 0;
+
+// Double-tap timing (ms)
+const unsigned long DOUBLE_TAP_WINDOW = 400;
+const unsigned long DEBOUNCE_TIME = 50;
 
 WiFiClientSecure client;
 
@@ -45,25 +46,23 @@ void connectWiFi() {
     }
 }
 
-bool sendToSalesforce(float temperature, float humidity) {
+bool sendToSalesforce(float temperature, float humidity, const char* function) {
     if (WiFi.status() != WL_CONNECTED) {
         Serial.println("WiFi not connected");
         return false;
     }
 
     HTTPClient http;
-
-    // Skip SSL certificate verification (for development)
     client.setInsecure();
 
     http.begin(client, SF_ENDPOINT);
     http.addHeader("Content-Type", "application/json");
 
-    // Build JSON payload
     String payload = "{";
     payload += "\"temperature\":" + String(temperature, 1) + ",";
     payload += "\"humidity\":" + String(humidity, 1) + ",";
     payload += "\"deviceId\":\"" + String(DEVICE_ID) + "\",";
+    payload += "\"function\":\"" + String(function) + "\",";
     payload += "\"apiKey\":\"" + String(SF_API_KEY) + "\"";
     payload += "}";
 
@@ -96,27 +95,22 @@ void setup() {
     Serial.println("================================");
     Serial.println("ESP32 Salesforce IoT Device");
     Serial.println("================================");
+    Serial.println("Single tap = Single function");
+    Serial.println("Double tap = Double function");
+    Serial.println("================================");
 
-    // Setup button input (Boot button has external pull-up)
     pinMode(BUTTON_PIN, INPUT_PULLUP);
 
     connectWiFi();
-
-    if (WiFi.status() == WL_CONNECTED) {
-        // Send initial reading on boot
-        Serial.println("\nSending initial reading...");
-        float temp = 72.0 + (random(0, 100) / 10.0);  // Simulated temp
-        float humidity = 40.0 + (random(0, 200) / 10.0);  // Simulated humidity
-        sendToSalesforce(temp, humidity);
-    }
 }
 
-void sendReading() {
-    // Simulated sensor values (replace with real sensor readings)
+void sendReading(const char* function) {
     float temp = 72.0 + (random(0, 100) / 10.0);
     float humidity = 40.0 + (random(0, 200) / 10.0);
 
     Serial.println("\n--- Sending Sensor Data ---");
+    Serial.print("Function: ");
+    Serial.println(function);
     Serial.print("Temperature: ");
     Serial.print(temp);
     Serial.println(" F");
@@ -124,7 +118,7 @@ void sendReading() {
     Serial.print(humidity);
     Serial.println(" %");
 
-    if (sendToSalesforce(temp, humidity)) {
+    if (sendToSalesforce(temp, humidity, function)) {
         Serial.println("Success!");
     } else {
         Serial.println("Failed to send");
@@ -132,30 +126,48 @@ void sendReading() {
 }
 
 void loop() {
-    static unsigned long lastSend = 0;
-    static unsigned long lastButtonPress = 0;
+    static unsigned long firstTapTime = 0;
+    static bool waitingForSecondTap = false;
     static bool lastButtonState = HIGH;
+    static unsigned long lastDebounceTime = 0;
 
-    // Reconnect WiFi if needed
     if (WiFi.status() != WL_CONNECTED) {
         Serial.println("WiFi lost - reconnecting...");
         connectWiFi();
     }
 
-    // Check button press (active LOW, with debounce)
-    bool buttonState = digitalRead(BUTTON_PIN);
-    if (buttonState == LOW && lastButtonState == HIGH && (millis() - lastButtonPress > 500)) {
-        lastButtonPress = millis();
-        Serial.println("\n*** Button Pressed! ***");
-        sendReading();
-    }
-    lastButtonState = buttonState;
+    bool reading = digitalRead(BUTTON_PIN);
 
-    // Send data every SEND_INTERVAL
-    if (millis() - lastSend > SEND_INTERVAL) {
-        lastSend = millis();
-        sendReading();
+    if (reading != lastButtonState) {
+        lastDebounceTime = millis();
     }
 
-    delay(10);
+    if ((millis() - lastDebounceTime) > DEBOUNCE_TIME) {
+        static bool buttonState = HIGH;
+
+        if (reading != buttonState) {
+            buttonState = reading;
+
+            if (buttonState == LOW) {
+                if (waitingForSecondTap && (millis() - firstTapTime) < DOUBLE_TAP_WINDOW) {
+                    Serial.println("\n*** DOUBLE TAP! ***");
+                    waitingForSecondTap = false;
+                    sendReading("Double");
+                } else {
+                    firstTapTime = millis();
+                    waitingForSecondTap = true;
+                }
+            }
+        }
+    }
+
+    lastButtonState = reading;
+
+    if (waitingForSecondTap && (millis() - firstTapTime) >= DOUBLE_TAP_WINDOW) {
+        Serial.println("\n*** SINGLE TAP! ***");
+        waitingForSecondTap = false;
+        sendReading("Single");
+    }
+
+    delay(5);
 }

@@ -32,6 +32,8 @@ global with sharing class SensorDataAPI {
                 Decimal.valueOf(String.valueOf(body.get('humidity'))) : null;
             reading.Device_Id__c = body.containsKey('deviceId') ?
                 String.valueOf(body.get('deviceId')) : 'unknown';
+            reading.Function__c = body.containsKey('function') ?
+                String.valueOf(body.get('function')) : null;
             reading.Reading_Timestamp__c = DateTime.now();
 
             insert reading;
