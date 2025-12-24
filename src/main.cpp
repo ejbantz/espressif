@@ -1,45 +1,29 @@
 #include <Arduino.h>
 #include <WiFi.h>
+#include <HTTPClient.h>
+#include <WiFiClientSecure.h>
 #include "credentials.h"
 
-void setup() {
-    Serial.begin(115200);
-    delay(1000);
+// Salesforce API Configuration
+const char* SF_ENDPOINT = "https://ejdev-dev-ed.develop.my.site.com/vforcesite/services/apexrest/sensor/reading";
+const char* SF_API_KEY = "LawnMonitor2024SecretKey";
+const char* DEVICE_ID = "ESP32-001";
 
-    Serial.println();
-    Serial.println("================================");
-    Serial.println("ESP32 WiFi Connection Test");
-    Serial.println("================================");
+// Send interval (30 seconds)
+const unsigned long SEND_INTERVAL = 30000;
 
-    // Set WiFi mode to station (client)
+WiFiClientSecure client;
+
+void connectWiFi() {
     WiFi.mode(WIFI_STA);
     WiFi.disconnect();
     delay(100);
-
-    // Scan for networks first
-    Serial.println("Scanning for networks...");
-    int numNetworks = WiFi.scanNetworks();
-    Serial.print("Found ");
-    Serial.print(numNetworks);
-    Serial.println(" networks:");
-
-    for (int i = 0; i < numNetworks; i++) {
-        Serial.print("  ");
-        Serial.print(i + 1);
-        Serial.print(": ");
-        Serial.print(WiFi.SSID(i));
-        Serial.print(" (");
-        Serial.print(WiFi.RSSI(i));
-        Serial.println(" dBm)");
-    }
-    Serial.println();
 
     Serial.print("Connecting to: ");
     Serial.println(WIFI_SSID);
 
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
-    // Wait for connection with timeout
     int attempts = 0;
     while (WiFi.status() != WL_CONNECTED && attempts < 30) {
         delay(500);
@@ -53,34 +37,105 @@ void setup() {
         Serial.println("WiFi Connected!");
         Serial.print("IP Address: ");
         Serial.println(WiFi.localIP());
-        Serial.print("Signal Strength (RSSI): ");
-        Serial.print(WiFi.RSSI());
-        Serial.println(" dBm");
-        Serial.print("MAC Address: ");
-        Serial.println(WiFi.macAddress());
     } else {
         Serial.println("WiFi Connection FAILED");
-        Serial.print("Status code: ");
-        Serial.println(WiFi.status());
+    }
+}
+
+bool sendToSalesforce(float temperature, float humidity) {
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("WiFi not connected");
+        return false;
+    }
+
+    HTTPClient http;
+
+    // Skip SSL certificate verification (for development)
+    client.setInsecure();
+
+    http.begin(client, SF_ENDPOINT);
+    http.addHeader("Content-Type", "application/json");
+
+    // Build JSON payload
+    String payload = "{";
+    payload += "\"temperature\":" + String(temperature, 1) + ",";
+    payload += "\"humidity\":" + String(humidity, 1) + ",";
+    payload += "\"deviceId\":\"" + String(DEVICE_ID) + "\",";
+    payload += "\"apiKey\":\"" + String(SF_API_KEY) + "\"";
+    payload += "}";
+
+    Serial.println("Sending to Salesforce...");
+    Serial.println(payload);
+
+    int httpCode = http.POST(payload);
+
+    if (httpCode > 0) {
+        String response = http.getString();
+        Serial.print("Response (");
+        Serial.print(httpCode);
+        Serial.print("): ");
+        Serial.println(response);
+        http.end();
+        return httpCode == 200 || httpCode == 201;
+    } else {
+        Serial.print("HTTP Error: ");
+        Serial.println(http.errorToString(httpCode));
+        http.end();
+        return false;
+    }
+}
+
+void setup() {
+    Serial.begin(115200);
+    delay(1000);
+
+    Serial.println();
+    Serial.println("================================");
+    Serial.println("ESP32 Salesforce IoT Device");
+    Serial.println("================================");
+
+    connectWiFi();
+
+    if (WiFi.status() == WL_CONNECTED) {
+        // Send initial reading on boot
+        Serial.println("\nSending initial reading...");
+        float temp = 72.0 + (random(0, 100) / 10.0);  // Simulated temp
+        float humidity = 40.0 + (random(0, 200) / 10.0);  // Simulated humidity
+        sendToSalesforce(temp, humidity);
     }
 }
 
 void loop() {
-    // Check connection status every 5 seconds
-    static unsigned long lastCheck = 0;
+    static unsigned long lastSend = 0;
 
-    if (millis() - lastCheck > 5000) {
-        lastCheck = millis();
+    // Reconnect WiFi if needed
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("WiFi lost - reconnecting...");
+        connectWiFi();
+    }
 
-        if (WiFi.status() == WL_CONNECTED) {
-            Serial.print("WiFi OK - IP: ");
-            Serial.print(WiFi.localIP());
-            Serial.print(" | RSSI: ");
-            Serial.print(WiFi.RSSI());
-            Serial.println(" dBm");
+    // Send data every SEND_INTERVAL
+    if (millis() - lastSend > SEND_INTERVAL) {
+        lastSend = millis();
+
+        // Simulated sensor values (replace with real sensor readings)
+        float temp = 72.0 + (random(0, 100) / 10.0);
+        float humidity = 40.0 + (random(0, 200) / 10.0);
+
+        Serial.println("\n--- Sending Sensor Data ---");
+        Serial.print("Temperature: ");
+        Serial.print(temp);
+        Serial.println(" F");
+        Serial.print("Humidity: ");
+        Serial.print(humidity);
+        Serial.println(" %");
+
+        if (sendToSalesforce(temp, humidity)) {
+            Serial.println("Success!");
         } else {
-            Serial.println("WiFi Disconnected - Reconnecting...");
-            WiFi.reconnect();
+            Serial.println("Failed to send");
         }
     }
+
+    delay(100);
 }

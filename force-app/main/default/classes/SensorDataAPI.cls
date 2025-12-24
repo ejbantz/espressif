@@ -9,16 +9,20 @@ global with sharing class SensorDataAPI {
         RestRequest req = RestContext.request;
         RestResponse res = RestContext.response;
 
-        // Validate API key from header
-        String providedKey = req.headers.get('X-API-Key');
-        if (String.isBlank(providedKey) || providedKey != API_KEY) {
-            res.statusCode = 401;
-            return '{"success":false,"error":"Invalid or missing API key"}';
-        }
-
         try {
             // Parse JSON body
             Map<String, Object> body = (Map<String, Object>) JSON.deserializeUntyped(req.requestBody.toString());
+
+            // Validate API key from body, query param, or header (Sites strip headers)
+            String providedKey = body.containsKey('apiKey') ?
+                String.valueOf(body.get('apiKey')) : req.params.get('apiKey');
+            if (String.isBlank(providedKey)) {
+                providedKey = req.headers.get('X-API-Key');
+            }
+            if (String.isBlank(providedKey) || providedKey != API_KEY) {
+                res.statusCode = 401;
+                return '{"success":false,"error":"Invalid or missing API key"}';
+            }
 
             // Create sensor reading record
             Sensor_Reading__c reading = new Sensor_Reading__c();
@@ -46,8 +50,11 @@ global with sharing class SensorDataAPI {
         RestRequest req = RestContext.request;
         RestResponse res = RestContext.response;
 
-        // Validate API key
-        String providedKey = req.headers.get('X-API-Key');
+        // Validate API key from query param or header (Sites strip headers)
+        String providedKey = req.params.get('apiKey');
+        if (String.isBlank(providedKey)) {
+            providedKey = req.headers.get('X-API-Key');
+        }
         if (String.isBlank(providedKey) || providedKey != API_KEY) {
             res.statusCode = 401;
             return '{"success":false,"error":"Invalid or missing API key"}';
