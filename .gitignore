@@ -1,0 +1,15 @@
+# PlatformIO
+.pio
+
+# IDE
+.vscode
+
+# Credentials
+include/credentials.h
+
+# OS
+.DS_Store
+
+# Salesforce
+.sf
+.sfdx
