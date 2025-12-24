@@ -202,10 +202,10 @@ void scanAndSendNetworks() {
 }
 
 void loop() {
-    static unsigned long firstTapTime = 0;
+    static unsigned long lastTapTime = 0;
     static int tapCount = 0;
     static bool lastButtonState = HIGH;
-    static unsigned long lastDebounceTime = 0;
+    static bool buttonPressed = false;
 
     if (WiFi.status() != WL_CONNECTED) {
         Serial.println("WiFi lost - reconnecting...");
@@ -214,39 +214,41 @@ void loop() {
 
     bool reading = digitalRead(BUTTON_PIN);
 
-    if (reading != lastButtonState) {
-        lastDebounceTime = millis();
+    // Detect button press (HIGH to LOW transition)
+    if (reading == LOW && lastButtonState == HIGH) {
+        buttonPressed = true;
     }
+    lastButtonState = reading;
 
-    if ((millis() - lastDebounceTime) > DEBOUNCE_TIME) {
-        static bool buttonState = HIGH;
+    // Process button press with simple debounce
+    if (buttonPressed) {
+        buttonPressed = false;
+        delay(50);  // Simple debounce
 
-        if (reading != buttonState) {
-            buttonState = reading;
+        unsigned long now = millis();
 
-            if (buttonState == LOW) {
-                // Button pressed
-                if (tapCount == 0 || (millis() - firstTapTime) > TAP_WINDOW) {
-                    // First tap or timeout - start new sequence
-                    tapCount = 1;
-                    firstTapTime = millis();
-                } else {
-                    // Additional tap within window
-                    tapCount++;
-                    if (tapCount >= 3) {
-                        Serial.println("\n*** TRIPLE TAP! ***");
-                        scanAndSendNetworks();
-                        tapCount = 0;
-                    }
-                }
-            }
+        if (now - lastTapTime > TAP_WINDOW) {
+            // New tap sequence
+            tapCount = 1;
+            Serial.println("Tap 1");
+        } else {
+            tapCount++;
+            Serial.print("Tap ");
+            Serial.println(tapCount);
+        }
+        lastTapTime = now;
+
+        // Triple tap triggers immediately
+        if (tapCount >= 3) {
+            Serial.println("\n*** TRIPLE TAP! ***");
+            scanAndSendNetworks();
+            tapCount = 0;
+            lastTapTime = 0;
         }
     }
 
-    lastButtonState = reading;
-
     // Check for timeout to trigger single or double tap
-    if (tapCount > 0 && (millis() - firstTapTime) >= TAP_WINDOW) {
+    if (tapCount > 0 && tapCount < 3 && (millis() - lastTapTime) >= TAP_WINDOW) {
         if (tapCount == 1) {
             Serial.println("\n*** SINGLE TAP! ***");
             sendReading("Single");
@@ -257,5 +259,5 @@ void loop() {
         tapCount = 0;
     }
 
-    delay(5);
+    delay(10);
 }
