@@ -52,6 +52,10 @@ const char* DEVICE_ID = "ESP32-001";
 // Boot button on GPIO0
 const int BUTTON_PIN = 0;
 
+// Touch sensor on GPIO4 (T0)
+const int TOUCH_PIN = T0;  // GPIO4
+const int TOUCH_THRESHOLD = 40;  // Values below this = touched
+
 // Multi-tap timing (ms)
 const unsigned long TAP_WINDOW = 400;
 const unsigned long DEBOUNCE_TIME = 50;
@@ -172,9 +176,10 @@ void setup() {
     Serial.println("================================");
     Serial.println("ESP32 Salesforce IoT Device");
     Serial.println("================================");
-    Serial.println("Single tap = Send reading");
-    Serial.println("Double tap = Send reading");
-    Serial.println("Triple tap = Scan WiFi networks");
+    Serial.println("Single tap  = Send reading");
+    Serial.println("Double tap  = Send reading");
+    Serial.println("Triple tap  = Scan WiFi networks");
+    Serial.println("Touch GPIO4 = Send reading");
     Serial.println("================================");
 
     pinMode(BUTTON_PIN, INPUT_PULLUP);
@@ -184,8 +189,10 @@ void setup() {
 }
 
 void sendReading(const char* function) {
-    float temp = 72.0 + (random(0, 100) / 10.0);
-    float humidity = 40.0 + (random(0, 200) / 10.0);
+    // Read internal chip temperature (Celsius) and convert to Fahrenheit
+    float tempC = temperatureRead();
+    float temp = (tempC * 9.0 / 5.0) + 32.0;
+    float humidity = 40.0 + (random(0, 200) / 10.0);  // Still random until we add a sensor
 
     Serial.println("\n--- Sending Sensor Data ---");
     Serial.print("Function: ");
@@ -373,6 +380,28 @@ void loop() {
             sendReading("Double");
         }
         tapCount = 0;
+    }
+
+    // Touch sensor detection
+    static bool wasTouched = false;
+    static unsigned long lastTouchTime = 0;
+    int touchValue = touchRead(TOUCH_PIN);
+
+    if (touchValue < TOUCH_THRESHOLD && !wasTouched) {
+        // Debounce - must be 200ms since last touch
+        if (millis() - lastTouchTime > 200) {
+            wasTouched = true;
+            lastTouchTime = millis();
+            Serial.print("\n*** TOUCH DETECTED! (value: ");
+            Serial.print(touchValue);
+            Serial.println(") ***");
+            notifyPhone("Touch!");
+            notifyButtonState(true);
+            sendReading("Touch");
+            notifyButtonState(false);
+        }
+    } else if (touchValue >= TOUCH_THRESHOLD) {
+        wasTouched = false;
     }
 
     delay(10);
