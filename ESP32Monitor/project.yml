@@ -1,0 +1,27 @@
+name: ESP32Monitor
+options:
+  bundleIdPrefix: com.dewwow
+  deploymentTarget:
+    iOS: "16.0"
+
+targets:
+  ESP32Monitor:
+    type: application
+    platform: iOS
+    sources:
+      - ESP32Monitor
+    settings:
+      base:
+        INFOPLIST_FILE: ESP32Monitor/Info.plist
+        PRODUCT_BUNDLE_IDENTIFIER: com.dewwow.ESP32Monitor
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        DEVELOPMENT_TEAM: ""
+        CODE_SIGN_STYLE: Automatic
+        SWIFT_VERSION: "5.0"
+    info:
+      path: ESP32Monitor/Info.plist
+      properties:
+        NSBluetoothAlwaysUsageDescription: "This app uses Bluetooth to connect to your ESP32 sensor device."
+        NSBluetoothPeripheralUsageDescription: "This app uses Bluetooth to connect to your ESP32 sensor device."
+        UILaunchScreen: {}

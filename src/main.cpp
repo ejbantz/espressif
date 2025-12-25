@@ -2,7 +2,47 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
+#include <BLE2902.h>
 #include "credentials.h"
+
+// BLE Configuration
+#define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
+#define BUTTON_CHAR_UUID    "beb5483e-36e1-4688-b7f5-ea07361b26a8"
+#define STATUS_CHAR_UUID    "1c95d5e3-d8f7-413a-bf3d-7a2e5d7be87e"
+
+BLEServer* pServer = NULL;
+BLECharacteristic* pButtonChar = NULL;
+BLECharacteristic* pStatusChar = NULL;
+bool deviceConnected = false;
+bool oldDeviceConnected = false;
+
+class MyServerCallbacks: public BLEServerCallbacks {
+    void onConnect(BLEServer* pServer) {
+        deviceConnected = true;
+        Serial.println("BLE: Phone connected");
+    };
+    void onDisconnect(BLEServer* pServer) {
+        deviceConnected = false;
+        Serial.println("BLE: Phone disconnected");
+    }
+};
+
+void notifyPhone(const char* status) {
+    if (deviceConnected && pStatusChar) {
+        pStatusChar->setValue(status);
+        pStatusChar->notify();
+    }
+}
+
+void notifyButtonState(bool pressed) {
+    if (deviceConnected && pButtonChar) {
+        pButtonChar->setValue(pressed ? "PRESSED" : "RELEASED");
+        pButtonChar->notify();
+    }
+}
 
 // Salesforce API Configuration
 const char* SF_ENDPOINT = "https://ejdev-dev-ed.develop.my.site.com/vforcesite/services/apexrest/sensor/reading";
@@ -87,6 +127,43 @@ bool sendToSalesforce(float temperature, float humidity, const char* function) {
     }
 }
 
+void setupBLE() {
+    Serial.println("Starting BLE...");
+
+    BLEDevice::init("ESP32-Sensor");
+    pServer = BLEDevice::createServer();
+    pServer->setCallbacks(new MyServerCallbacks());
+
+    BLEService *pService = pServer->createService(SERVICE_UUID);
+
+    // Button state characteristic (notify)
+    pButtonChar = pService->createCharacteristic(
+        BUTTON_CHAR_UUID,
+        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY
+    );
+    pButtonChar->addDescriptor(new BLE2902());
+    pButtonChar->setValue("RELEASED");
+
+    // Status characteristic (notify) - shows what's being sent to Salesforce
+    pStatusChar = pService->createCharacteristic(
+        STATUS_CHAR_UUID,
+        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY
+    );
+    pStatusChar->addDescriptor(new BLE2902());
+    pStatusChar->setValue("Ready");
+
+    pService->start();
+
+    BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
+    pAdvertising->addServiceUUID(SERVICE_UUID);
+    pAdvertising->setScanResponse(true);
+    pAdvertising->setMinPreferred(0x06);
+    pAdvertising->setMinPreferred(0x12);
+    BLEDevice::startAdvertising();
+
+    Serial.println("BLE ready - look for 'ESP32-Sensor'");
+}
+
 void setup() {
     Serial.begin(115200);
     delay(1000);
@@ -102,6 +179,7 @@ void setup() {
 
     pinMode(BUTTON_PIN, INPUT_PULLUP);
 
+    setupBLE();
     connectWiFi();
 }
 
@@ -119,20 +197,32 @@ void sendReading(const char* function) {
     Serial.print(humidity);
     Serial.println(" %");
 
+    // Notify phone what we're sending
+    char statusMsg[100];
+    snprintf(statusMsg, sizeof(statusMsg), "Sending %s: %.1fF, %.1f%%", function, temp, humidity);
+    notifyPhone(statusMsg);
+
     if (sendToSalesforce(temp, humidity, function)) {
         Serial.println("Success!");
+        notifyPhone("Salesforce: Success!");
     } else {
         Serial.println("Failed to send");
+        notifyPhone("Salesforce: Failed!");
     }
 }
 
 void scanAndSendNetworks() {
     Serial.println("\n--- Scanning WiFi Networks ---");
+    notifyPhone("Scanning WiFi...");
 
     int numNetworks = WiFi.scanNetworks();
     Serial.print("Found ");
     Serial.print(numNetworks);
     Serial.println(" networks");
+
+    char scanMsg[50];
+    snprintf(scanMsg, sizeof(scanMsg), "Found %d networks", numNetworks);
+    notifyPhone(scanMsg);
 
     // Build networks JSON array
     String networks = "[";
@@ -206,13 +296,32 @@ void loop() {
     static int tapCount = 0;
     static bool lastButtonState = HIGH;
     static bool buttonPressed = false;
+    static bool lastButtonReading = HIGH;
+
+    // Handle BLE disconnection - restart advertising
+    if (!deviceConnected && oldDeviceConnected) {
+        delay(500);
+        pServer->startAdvertising();
+        Serial.println("BLE: Advertising restarted");
+        oldDeviceConnected = deviceConnected;
+    }
+    if (deviceConnected && !oldDeviceConnected) {
+        oldDeviceConnected = deviceConnected;
+    }
 
     if (WiFi.status() != WL_CONNECTED) {
         Serial.println("WiFi lost - reconnecting...");
+        notifyPhone("WiFi reconnecting...");
         connectWiFi();
     }
 
     bool reading = digitalRead(BUTTON_PIN);
+
+    // Notify phone of button state changes
+    if (reading != lastButtonReading) {
+        notifyButtonState(reading == LOW);
+        lastButtonReading = reading;
+    }
 
     // Detect button press (HIGH to LOW transition)
     if (reading == LOW && lastButtonState == HIGH) {
@@ -231,16 +340,21 @@ void loop() {
             // New tap sequence
             tapCount = 1;
             Serial.println("Tap 1");
+            notifyPhone("Tap 1...");
         } else {
             tapCount++;
             Serial.print("Tap ");
             Serial.println(tapCount);
+            char tapMsg[20];
+            snprintf(tapMsg, sizeof(tapMsg), "Tap %d...", tapCount);
+            notifyPhone(tapMsg);
         }
         lastTapTime = now;
 
         // Triple tap triggers immediately
         if (tapCount >= 3) {
             Serial.println("\n*** TRIPLE TAP! ***");
+            notifyPhone("Triple tap!");
             scanAndSendNetworks();
             tapCount = 0;
             lastTapTime = 0;
@@ -251,9 +365,11 @@ void loop() {
     if (tapCount > 0 && tapCount < 3 && (millis() - lastTapTime) >= TAP_WINDOW) {
         if (tapCount == 1) {
             Serial.println("\n*** SINGLE TAP! ***");
+            notifyPhone("Single tap!");
             sendReading("Single");
         } else if (tapCount == 2) {
             Serial.println("\n*** DOUBLE TAP! ***");
+            notifyPhone("Double tap!");
             sendReading("Double");
         }
         tapCount = 0;
