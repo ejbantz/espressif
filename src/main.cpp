@@ -19,7 +19,7 @@
 // SIM7000A pins
 #define MODEM_TX 17  // ESP32 TX → Modem RX
 #define MODEM_RX 16  // Modem TX → ESP32 RX
-#define MODEM_PWRKEY 26
+// #define MODEM_PWRKEY 26  // Optional - comment out if not wired, press PWR button manually
 #define SerialAT Serial2
 
 // Hologram APN
@@ -50,6 +50,8 @@ extern const char* DEVICE_ID;
 #define WIFI_CRED_CHAR_UUID "b2f9e6c3-8c4d-5f0b-9e3e-7d6c5b4a3f20"
 #define WIFI_STATUS_CHAR_UUID "c3a0f7d4-9d5e-6f1c-0a4f-8e7d6c5b4a31"
 #define SENSOR_CHAR_UUID "d4b1e8f5-0e6f-7a2d-1b5a-9f8e7d6c5b42"
+#define GPS_CHAR_UUID "f6d3a9b7-2c4e-5f6a-8b9c-0d1e2f3a4b53"
+#define CELL_CHAR_UUID "a7e4b0c8-3d5f-6a7b-9c0d-1e2f3a4b5c64"
 
 // Buzzer on GPIO25
 const int BUZZER_PIN = 25;
@@ -65,6 +67,8 @@ BLECharacteristic* pWifiScanChar = NULL;
 BLECharacteristic* pWifiCredChar = NULL;
 BLECharacteristic* pWifiStatusChar = NULL;
 BLECharacteristic* pSensorChar = NULL;
+BLECharacteristic* pGpsChar = NULL;
+BLECharacteristic* pCellChar = NULL;
 bool deviceConnected = false;
 bool oldDeviceConnected = false;
 bool wifiScanRequested = false;
@@ -267,8 +271,10 @@ void beepCellular() {
     playTone(800, 60);
 }
 
-// Modem power control
+// Modem power control (optional - press PWR button on SIM7000A board if not wired)
 void modemPowerOn() {
+    // Skip if PWRKEY not connected - user presses button manually
+    #ifdef MODEM_PWRKEY
     pinMode(MODEM_PWRKEY, OUTPUT);
     digitalWrite(MODEM_PWRKEY, LOW);
     delay(1000);
@@ -276,6 +282,9 @@ void modemPowerOn() {
     delay(2000);
     digitalWrite(MODEM_PWRKEY, LOW);
     Serial.println("Modem power key toggled");
+    #else
+    Serial.println("PWRKEY not wired - press PWR button on SIM7000A board");
+    #endif
 }
 
 // Initialize cellular modem
@@ -972,6 +981,22 @@ void setupBLE() {
     pSensorChar->addDescriptor(new BLE2902());
     pSensorChar->setValue("--");
 
+    // GPS status characteristic
+    pGpsChar = pService->createCharacteristic(
+        GPS_CHAR_UUID,
+        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY
+    );
+    pGpsChar->addDescriptor(new BLE2902());
+    pGpsChar->setValue("No modem");
+
+    // Cellular status characteristic
+    pCellChar = pService->createCharacteristic(
+        CELL_CHAR_UUID,
+        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY
+    );
+    pCellChar->addDescriptor(new BLE2902());
+    pCellChar->setValue("No modem");
+
     // Salesforce POST characteristic - sends data to phone for posting
     pSalesforceChar = pService->createCharacteristic(
         SALESFORCE_CHAR_UUID,
@@ -1094,6 +1119,45 @@ void scanAndSendNetworks() {
     sendSensorData(temp, moisture, "Scan");
 }
 
+void updateGpsStatus() {
+    if (!pGpsChar) return;
+
+    char gpsMsg[50];
+    if (!modemInitialized) {
+        snprintf(gpsMsg, sizeof(gpsMsg), "No modem");
+    } else if (gpsValid) {
+        snprintf(gpsMsg, sizeof(gpsMsg), "%.4f, %.4f", gpsLatitude, gpsLongitude);
+    } else {
+        snprintf(gpsMsg, sizeof(gpsMsg), "Searching...");
+    }
+
+    pGpsChar->setValue(gpsMsg);
+    if (deviceConnected) {
+        pGpsChar->notify();
+    }
+}
+
+void updateCellStatus() {
+    if (!pCellChar) return;
+
+    char cellMsg[50];
+    if (!modemInitialized) {
+        snprintf(cellMsg, sizeof(cellMsg), "No modem");
+    } else if (modem.isGprsConnected()) {
+        int csq = modem.getSignalQuality();
+        snprintf(cellMsg, sizeof(cellMsg), "Connected (CSQ:%d)", csq);
+    } else if (modem.isNetworkConnected()) {
+        snprintf(cellMsg, sizeof(cellMsg), "Registered");
+    } else {
+        snprintf(cellMsg, sizeof(cellMsg), "Searching...");
+    }
+
+    pCellChar->setValue(cellMsg);
+    if (deviceConnected) {
+        pCellChar->notify();
+    }
+}
+
 void updateSensorReading() {
     // Read sensors and update BLE characteristic (doesn't post to Salesforce)
     float tempC = temperatureRead();
@@ -1109,6 +1173,10 @@ void updateSensorReading() {
             pSensorChar->notify();
         }
     }
+
+    // Also update GPS and cellular status
+    updateGpsStatus();
+    updateCellStatus();
 }
 
 void loop() {

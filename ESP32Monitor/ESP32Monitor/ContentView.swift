@@ -116,6 +116,46 @@ struct ContentView: View {
                     .background(Color(.systemGray6))
                     .cornerRadius(8)
 
+                    // GPS Status
+                    HStack {
+                        Image(systemName: bleManager.gpsStatus.contains(",") ? "location.fill" : "location.slash")
+                            .font(.title2)
+                            .foregroundColor(bleManager.gpsStatus.contains(",") ? .green : .gray)
+                            .frame(width: 30)
+                        VStack(alignment: .leading) {
+                            Text("GPS")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Text(bleManager.gpsStatus)
+                                .font(.subheadline)
+                                .fontWeight(.medium)
+                        }
+                        Spacer()
+                    }
+                    .padding(12)
+                    .background(Color(.systemGray6))
+                    .cornerRadius(8)
+
+                    // Cellular Status
+                    HStack {
+                        Image(systemName: bleManager.cellStatus.contains("Connected") ? "antenna.radiowaves.left.and.right" : "antenna.radiowaves.left.and.right.slash")
+                            .font(.title2)
+                            .foregroundColor(bleManager.cellStatus.contains("Connected") ? .green : .gray)
+                            .frame(width: 30)
+                        VStack(alignment: .leading) {
+                            Text("Cellular")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Text(bleManager.cellStatus)
+                                .font(.subheadline)
+                                .fontWeight(.medium)
+                        }
+                        Spacer()
+                    }
+                    .padding(12)
+                    .background(Color(.systemGray6))
+                    .cornerRadius(8)
+
                     // Button State
                     HStack {
                         Image(systemName: bleManager.buttonState == "PRESSED" ? "button.programmable" : "button.programmable.square")

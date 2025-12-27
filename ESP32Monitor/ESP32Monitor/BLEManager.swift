@@ -18,6 +18,8 @@ class BLEManager: NSObject, ObservableObject {
     let wifiCredCharUUID = CBUUID(string: "b2f9e6c3-8c4d-5f0b-9e3e-7d6c5b4a3f20")
     let wifiStatusCharUUID = CBUUID(string: "c3a0f7d4-9d5e-6f1c-0a4f-8e7d6c5b4a31")
     let sensorCharUUID = CBUUID(string: "d4b1e8f5-0e6f-7a2d-1b5a-9f8e7d6c5b42")
+    let gpsCharUUID = CBUUID(string: "f6d3a9b7-2c4e-5f6a-8b9c-0d1e2f3a4b53")
+    let cellCharUUID = CBUUID(string: "a7e4b0c8-3d5f-6a7b-9c0d-1e2f3a4b5c64")
     let salesforceCharUUID = CBUUID(string: "e5c2f8a6-1b3d-4e5f-9a7c-8d6b5e4f3a21")
 
     // Salesforce API config
@@ -32,6 +34,8 @@ class BLEManager: NSObject, ObservableObject {
     private var wifiCredCharacteristic: CBCharacteristic?
     private var wifiStatusCharacteristic: CBCharacteristic?
     private var sensorCharacteristic: CBCharacteristic?
+    private var gpsCharacteristic: CBCharacteristic?
+    private var cellCharacteristic: CBCharacteristic?
     private var salesforceCharacteristic: CBCharacteristic?
 
     @Published var isScanning = false
@@ -44,6 +48,8 @@ class BLEManager: NSObject, ObservableObject {
     @Published var isWifiScanning = false
     @Published var wifiConnectionStatus = "Unknown"
     @Published var sensorReading = "--"
+    @Published var gpsStatus = "No modem"
+    @Published var cellStatus = "No modem"
 
     override init() {
         super.init()
@@ -174,6 +180,8 @@ extension BLEManager: CBCentralManagerDelegate {
         wifiNetworks = []
         wifiConnectionStatus = "Unknown"
         sensorReading = "--"
+        gpsStatus = "No modem"
+        cellStatus = "No modem"
         addLog("Disconnected")
     }
 
@@ -190,7 +198,7 @@ extension BLEManager: CBPeripheralDelegate {
         for service in services {
             if service.uuid == serviceUUID {
                 addLog("Found ESP32 service")
-                peripheral.discoverCharacteristics([buttonCharUUID, statusCharUUID, wifiScanCharUUID, wifiCredCharUUID, wifiStatusCharUUID, sensorCharUUID, salesforceCharUUID], for: service)
+                peripheral.discoverCharacteristics([buttonCharUUID, statusCharUUID, wifiScanCharUUID, wifiCredCharUUID, wifiStatusCharUUID, sensorCharUUID, gpsCharUUID, cellCharUUID, salesforceCharUUID], for: service)
             }
         }
     }
@@ -232,6 +240,18 @@ extension BLEManager: CBPeripheralDelegate {
                 peripheral.readValue(for: characteristic)
                 addLog("Sensor ready")
             }
+            if characteristic.uuid == gpsCharUUID {
+                gpsCharacteristic = characteristic
+                peripheral.setNotifyValue(true, for: characteristic)
+                peripheral.readValue(for: characteristic)
+                addLog("GPS ready")
+            }
+            if characteristic.uuid == cellCharUUID {
+                cellCharacteristic = characteristic
+                peripheral.setNotifyValue(true, for: characteristic)
+                peripheral.readValue(for: characteristic)
+                addLog("Cellular ready")
+            }
             if characteristic.uuid == salesforceCharUUID {
                 salesforceCharacteristic = characteristic
                 peripheral.setNotifyValue(true, for: characteristic)
@@ -258,6 +278,10 @@ extension BLEManager: CBPeripheralDelegate {
                 self.wifiConnectionStatus = value
             } else if characteristic.uuid == self.sensorCharUUID {
                 self.sensorReading = value
+            } else if characteristic.uuid == self.gpsCharUUID {
+                self.gpsStatus = value
+            } else if characteristic.uuid == self.cellCharUUID {
+                self.cellStatus = value
             } else if characteristic.uuid == self.salesforceCharUUID {
                 // Received data from ESP32 to post to Salesforce
                 self.postToSalesforce(jsonPayload: value)
