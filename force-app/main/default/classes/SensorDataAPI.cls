@@ -36,6 +36,12 @@ global with sharing class SensorDataAPI {
                 String.valueOf(body.get('function')) : null;
             reading.Networks__c = body.containsKey('networks') ?
                 JSON.serialize(body.get('networks')) : null;
+            reading.Latitude__c = body.containsKey('latitude') ?
+                Decimal.valueOf(String.valueOf(body.get('latitude'))) : null;
+            reading.Longitude__c = body.containsKey('longitude') ?
+                Decimal.valueOf(String.valueOf(body.get('longitude'))) : null;
+            reading.Connection_Type__c = body.containsKey('connectionType') ?
+                String.valueOf(body.get('connectionType')) : null;
             reading.Reading_Timestamp__c = DateTime.now();
 
             insert reading;
@@ -69,12 +75,12 @@ global with sharing class SensorDataAPI {
 
             List<Sensor_Reading__c> readings;
             if (String.isNotBlank(deviceId)) {
-                readings = [SELECT Id, Name, Temperature__c, Humidity__c, Device_Id__c, Reading_Timestamp__c
+                readings = [SELECT Id, Name, Temperature__c, Humidity__c, Device_Id__c, Reading_Timestamp__c, Latitude__c, Longitude__c, Connection_Type__c
                            FROM Sensor_Reading__c
                            WHERE Device_Id__c = :deviceId
                            ORDER BY CreatedDate DESC LIMIT 1];
             } else {
-                readings = [SELECT Id, Name, Temperature__c, Humidity__c, Device_Id__c, Reading_Timestamp__c
+                readings = [SELECT Id, Name, Temperature__c, Humidity__c, Device_Id__c, Reading_Timestamp__c, Latitude__c, Longitude__c, Connection_Type__c
                            FROM Sensor_Reading__c
                            ORDER BY CreatedDate DESC LIMIT 1];
             }

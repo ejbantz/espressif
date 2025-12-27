@@ -11,6 +11,37 @@
 #include "esp_wifi.h"
 #include "credentials.h"
 
+// TinyGSM for SIM7000A cellular modem
+#define TINY_GSM_MODEM_SIM7000
+#define TINY_GSM_RX_BUFFER 1024
+#include <TinyGsmClient.h>
+
+// SIM7000A pins
+#define MODEM_TX 17  // ESP32 TX → Modem RX
+#define MODEM_RX 16  // Modem TX → ESP32 RX
+#define MODEM_PWRKEY 26
+#define SerialAT Serial2
+
+// Hologram APN
+const char apn[] = "hologram";
+const char gprsUser[] = "";
+const char gprsPass[] = "";
+
+// Modem instance
+TinyGsm modem(SerialAT);
+TinyGsmClient cellularClient(modem);
+bool modemInitialized = false;
+
+// GPS data
+float gpsLatitude = 0.0;
+float gpsLongitude = 0.0;
+bool gpsValid = false;
+
+// Forward declarations for Salesforce config
+extern const char* SF_ENDPOINT;
+extern const char* SF_API_KEY;
+extern const char* DEVICE_ID;
+
 // BLE Configuration
 #define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
 #define BUTTON_CHAR_UUID    "beb5483e-36e1-4688-b7f5-ea07361b26a8"
@@ -40,6 +71,7 @@ bool wifiScanRequested = false;
 bool newCredentialsReceived = false;
 bool forgetNetworkRequested = false;
 bool pauseSensorUpdates = false;  // Pause during HTTP requests
+bool bleEnabled = false;  // BLE off by default for reliable HTTP
 String newSSID = "";
 String newPassword = "";
 String forgetSSID = "";
@@ -210,6 +242,268 @@ void beepScanning() {
     playTone(1200, 30);
 }
 
+void beepBleOn() {
+    // Rising three-tone - BLE enabled
+    playTone(440, 80);
+    delay(50);
+    playTone(660, 80);
+    delay(50);
+    playTone(880, 120);
+}
+
+void beepBleOff() {
+    // Descending three-tone - BLE disabled
+    playTone(880, 80);
+    delay(50);
+    playTone(660, 80);
+    delay(50);
+    playTone(440, 120);
+}
+
+void beepCellular() {
+    // Quick double chirp - cellular activity
+    playTone(600, 40);
+    delay(30);
+    playTone(800, 60);
+}
+
+// Modem power control
+void modemPowerOn() {
+    pinMode(MODEM_PWRKEY, OUTPUT);
+    digitalWrite(MODEM_PWRKEY, LOW);
+    delay(1000);
+    digitalWrite(MODEM_PWRKEY, HIGH);
+    delay(2000);
+    digitalWrite(MODEM_PWRKEY, LOW);
+    Serial.println("Modem power key toggled");
+}
+
+// Initialize cellular modem
+bool initModem() {
+    if (modemInitialized) return true;
+
+    Serial.println("Initializing SIM7000A modem...");
+    SerialAT.begin(9600, SERIAL_8N1, MODEM_RX, MODEM_TX);
+    delay(3000);
+
+    modemPowerOn();
+    delay(5000);
+
+    Serial.println("Testing modem communication...");
+    if (!modem.testAT()) {
+        Serial.println("Modem not responding, trying again...");
+        modemPowerOn();
+        delay(5000);
+        if (!modem.testAT()) {
+            Serial.println("Modem failed to respond");
+            return false;
+        }
+    }
+
+    Serial.println("Modem OK");
+    String modemInfo = modem.getModemInfo();
+    Serial.print("Modem Info: ");
+    Serial.println(modemInfo);
+
+    // Enable GPS
+    Serial.println("Enabling GPS...");
+    modem.sendAT("+CGNSPWR=1");  // Power on GPS
+    modem.waitResponse();
+    delay(1000);
+
+    modemInitialized = true;
+    return true;
+}
+
+// Connect to cellular network
+bool connectCellular() {
+    if (!modemInitialized && !initModem()) {
+        return false;
+    }
+
+    Serial.println("Connecting to cellular network...");
+
+    // Check SIM card
+    if (modem.getSimStatus() != 1) {
+        Serial.println("SIM card not detected");
+        return false;
+    }
+    Serial.println("SIM OK");
+
+    // Wait for network registration
+    Serial.print("Waiting for network...");
+    int timeout = 60;
+    while (!modem.isNetworkConnected() && timeout > 0) {
+        Serial.print(".");
+        delay(1000);
+        timeout--;
+    }
+    Serial.println();
+
+    if (!modem.isNetworkConnected()) {
+        Serial.println("Network registration failed");
+        return false;
+    }
+    Serial.println("Network registered");
+
+    // Connect GPRS
+    Serial.print("Connecting GPRS...");
+    if (!modem.gprsConnect(apn, gprsUser, gprsPass)) {
+        Serial.println("GPRS connection failed");
+        return false;
+    }
+    Serial.println("GPRS connected!");
+
+    beepCellular();
+    return true;
+}
+
+// Read GPS coordinates
+bool updateGPS() {
+    if (!modemInitialized) return false;
+
+    // Request GPS info
+    modem.sendAT("+CGNSINF");
+    if (modem.waitResponse(10000L, "+CGNSINF:") != 1) {
+        return false;
+    }
+
+    // Parse CGNSINF response: run,fix,date,time,lat,lon,alt,speed,course,...
+    String gpsData = SerialAT.readStringUntil('\n');
+    Serial.print("GPS raw: ");
+    Serial.println(gpsData);
+
+    // Parse fields
+    int commaIndex = 0;
+    String fields[10];
+    int fieldCount = 0;
+    int lastIndex = 0;
+
+    for (int i = 0; i < gpsData.length() && fieldCount < 10; i++) {
+        if (gpsData.charAt(i) == ',') {
+            fields[fieldCount++] = gpsData.substring(lastIndex, i);
+            lastIndex = i + 1;
+        }
+    }
+    if (lastIndex < gpsData.length() && fieldCount < 10) {
+        fields[fieldCount++] = gpsData.substring(lastIndex);
+    }
+
+    // Field 1 = fix status (1 = valid fix)
+    if (fieldCount >= 6 && fields[1] == "1") {
+        gpsLatitude = fields[3].toFloat();
+        gpsLongitude = fields[4].toFloat();
+        gpsValid = true;
+        Serial.print("GPS: ");
+        Serial.print(gpsLatitude, 6);
+        Serial.print(", ");
+        Serial.println(gpsLongitude, 6);
+        return true;
+    }
+
+    gpsValid = false;
+    Serial.println("No GPS fix yet");
+    return false;
+}
+
+// Send data via cellular HTTP
+bool sendViaCellular(float temperature, float humidity, const char* function) {
+    if (!modemInitialized) {
+        Serial.println("Modem not initialized");
+        if (!initModem()) return false;
+    }
+
+    if (!modem.isGprsConnected()) {
+        Serial.println("GPRS not connected, reconnecting...");
+        if (!connectCellular()) return false;
+    }
+
+    // Try to get GPS fix
+    updateGPS();
+
+    Serial.println("Sending via cellular HTTP...");
+    beepCellular();
+
+    // Build JSON payload
+    String payload = "{";
+    payload += "\"temperature\":" + String(temperature, 1) + ",";
+    payload += "\"humidity\":" + String(humidity, 1) + ",";
+    payload += "\"deviceId\":\"" + String(DEVICE_ID) + "\",";
+    payload += "\"function\":\"" + String(function) + "\",";
+    payload += "\"connectionType\":\"Cellular\",";
+    if (gpsValid) {
+        payload += "\"latitude\":" + String(gpsLatitude, 6) + ",";
+        payload += "\"longitude\":" + String(gpsLongitude, 6) + ",";
+    }
+    payload += "\"apiKey\":\"" + String(SF_API_KEY) + "\"";
+    payload += "}";
+
+    Serial.println(payload);
+
+    // Use TinyGSM HTTP
+    modem.sendAT("+HTTPINIT");
+    if (modem.waitResponse() != 1) {
+        Serial.println("HTTP init failed");
+        return false;
+    }
+
+    modem.sendAT("+HTTPPARA=\"CID\",1");
+    modem.waitResponse();
+
+    String urlCmd = "+HTTPPARA=\"URL\",\"" + String(SF_ENDPOINT) + "\"";
+    modem.sendAT(urlCmd.c_str());
+    modem.waitResponse();
+
+    modem.sendAT("+HTTPPARA=\"CONTENT\",\"application/json\"");
+    modem.waitResponse();
+
+    // Set POST data
+    String dataCmd = "+HTTPDATA=" + String(payload.length()) + ",10000";
+    modem.sendAT(dataCmd.c_str());
+    if (modem.waitResponse(10000L, "DOWNLOAD") != 1) {
+        Serial.println("HTTP data setup failed");
+        modem.sendAT("+HTTPTERM");
+        modem.waitResponse();
+        return false;
+    }
+
+    SerialAT.print(payload);
+    delay(1000);
+
+    // Execute POST
+    modem.sendAT("+HTTPACTION=1");  // 1 = POST
+    if (modem.waitResponse(30000L, "+HTTPACTION:") != 1) {
+        Serial.println("HTTP POST timeout");
+        modem.sendAT("+HTTPTERM");
+        modem.waitResponse();
+        return false;
+    }
+
+    String response = SerialAT.readStringUntil('\n');
+    Serial.print("HTTP response: ");
+    Serial.println(response);
+
+    // Parse response: +HTTPACTION: method,status,length
+    int status = 0;
+    int firstComma = response.indexOf(',');
+    int secondComma = response.indexOf(',', firstComma + 1);
+    if (firstComma > 0 && secondComma > firstComma) {
+        status = response.substring(firstComma + 1, secondComma).toInt();
+    }
+
+    modem.sendAT("+HTTPTERM");
+    modem.waitResponse();
+
+    if (status == 200 || status == 201) {
+        Serial.println("Cellular POST success!");
+        return true;
+    }
+
+    Serial.print("Cellular POST failed with status: ");
+    Serial.println(status);
+    return false;
+}
+
 // WiFi credential storage functions
 void saveWifiCredential(const String& ssid, const String& password) {
     preferences.begin("wifi", false);
@@ -377,7 +671,7 @@ const int MOISTURE_DRY = 2800;   // ADC value when dry (in air)
 const int MOISTURE_WET = 1200;   // ADC value when wet (in water)
 
 // Multi-tap timing (ms)
-const unsigned long TAP_WINDOW = 400;
+const unsigned long TAP_WINDOW = 600;  // Time between taps (ms)
 const unsigned long DEBOUNCE_TIME = 50;
 
 WiFiClientSecure client;
@@ -520,31 +814,104 @@ void connectWiFi() {
 BLECharacteristic* pSalesforceChar = NULL;
 #define SALESFORCE_CHAR_UUID "e5c2f8a6-1b3d-4e5f-9a7c-8d6b5e4f3a21"
 
-void sendToPhone(float temperature, float humidity, const char* function) {
-    // Send data to phone via BLE - phone will POST to Salesforce
-    if (!deviceConnected || !pSalesforceChar) {
-        Serial.println("Phone not connected, cannot send");
-        notifyPhone("No phone connection");
-        beepFail();
-        return;
+bool sendDirectToSalesforce(float temperature, float humidity, const char* function) {
+    // Direct WiFi HTTP - only called when BLE is disabled
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("WiFi not connected");
+        return false;
     }
 
-    // Create JSON payload for phone to POST
+    Serial.println("Sending direct to Salesforce via WiFi...");
+
+    // Try to get GPS if modem is available
+    if (modemInitialized) {
+        updateGPS();
+    }
+
+    client.setInsecure();
+    HTTPClient http;
+    http.setTimeout(10000);
+    http.begin(client, SF_ENDPOINT);
+    http.addHeader("Content-Type", "application/json");
+
     String payload = "{";
     payload += "\"temperature\":" + String(temperature, 1) + ",";
     payload += "\"humidity\":" + String(humidity, 1) + ",";
     payload += "\"deviceId\":\"" + String(DEVICE_ID) + "\",";
-    payload += "\"function\":\"" + String(function) + "\"";
+    payload += "\"function\":\"" + String(function) + "\",";
+    payload += "\"connectionType\":\"WiFi\",";
+    if (gpsValid) {
+        payload += "\"latitude\":" + String(gpsLatitude, 6) + ",";
+        payload += "\"longitude\":" + String(gpsLongitude, 6) + ",";
+    }
+    payload += "\"apiKey\":\"" + String(SF_API_KEY) + "\"";
     payload += "}";
 
-    Serial.println("Sending to phone for Salesforce POST:");
     Serial.println(payload);
+    int httpCode = http.POST(payload);
+    bool success = (httpCode == 200 || httpCode == 201);
 
-    pSalesforceChar->setValue(payload.c_str());
-    pSalesforceChar->notify();
+    if (success) {
+        Serial.println("WiFi POST success!");
+    } else {
+        Serial.print("WiFi POST failed: ");
+        Serial.println(httpCode);
+    }
 
-    notifyPhone("Sent to phone");
-    beepSuccess();
+    http.end();
+    return success;
+}
+
+void sendSensorData(float temperature, float humidity, const char* function) {
+    // Priority 1: Phone (BLE relay)
+    if (bleEnabled && deviceConnected && pSalesforceChar) {
+        // Get GPS for phone to include in POST
+        if (modemInitialized) {
+            updateGPS();
+        }
+
+        String payload = "{";
+        payload += "\"temperature\":" + String(temperature, 1) + ",";
+        payload += "\"humidity\":" + String(humidity, 1) + ",";
+        payload += "\"deviceId\":\"" + String(DEVICE_ID) + "\",";
+        payload += "\"function\":\"" + String(function) + "\"";
+        if (gpsValid) {
+            payload += ",\"latitude\":" + String(gpsLatitude, 6);
+            payload += ",\"longitude\":" + String(gpsLongitude, 6);
+        }
+        payload += "}";
+
+        Serial.println("Priority 1: Sending via Phone (BLE)");
+        Serial.println(payload);
+
+        pSalesforceChar->setValue(payload.c_str());
+        pSalesforceChar->notify();
+
+        notifyPhone("Sent via Phone");
+        beepSuccess();
+        return;
+    }
+
+    // Priority 2: WiFi (direct HTTP)
+    if (WiFi.status() == WL_CONNECTED) {
+        Serial.println("Priority 2: Trying WiFi...");
+        if (sendDirectToSalesforce(temperature, humidity, function)) {
+            beepSuccess();
+            return;
+        }
+        Serial.println("WiFi failed, trying cellular...");
+    } else {
+        Serial.println("WiFi not connected, trying cellular...");
+    }
+
+    // Priority 3: Cellular (SIM7000A)
+    Serial.println("Priority 3: Trying Cellular...");
+    if (sendViaCellular(temperature, humidity, function)) {
+        beepSuccess();
+    } else {
+        Serial.println("All connection methods failed!");
+        beepFail();
+    }
 }
 
 void setupBLE() {
@@ -648,11 +1015,12 @@ void setup() {
     // Startup chime
     beepStartup();
 
-    // Connect WiFi first (before BLE) so postConnectionStatus works
+    // Connect WiFi first
     connectWiFi();
 
-    // Then start BLE
-    setupBLE();
+    // BLE stays OFF by default for reliable direct HTTP
+    // User can 4-tap to enable BLE for phone configuration
+    Serial.println("BLE disabled - 4-tap to enable");
 }
 
 int readSoilMoisture() {
@@ -709,8 +1077,8 @@ void sendReading(const char* function) {
     snprintf(statusMsg, sizeof(statusMsg), "Reading: %.1fF, %.0f%%", temp, humidity);
     notifyPhone(statusMsg);
 
-    // Send to phone via BLE - phone will POST to Salesforce
-    sendToPhone(temp, humidity, function);
+    // Send via best available method: Phone → WiFi → Cellular
+    sendSensorData(temp, humidity, function);
 }
 
 void scanAndSendNetworks() {
@@ -723,7 +1091,7 @@ void scanAndSendNetworks() {
     float moisture = 0;  // Simple read for scan
 
     notifyPhone("Triple tap - scanning");
-    sendToPhone(temp, moisture, "Scan");
+    sendSensorData(temp, moisture, "Scan");
 }
 
 void updateSensorReading() {
@@ -751,11 +1119,14 @@ void loop() {
     static bool lastButtonReading = HIGH;
     static unsigned long lastSensorUpdate = 0;
 
-    // Handle BLE disconnection - restart advertising
-    if (!deviceConnected && oldDeviceConnected) {
+    // Handle BLE disconnection - fully disable BLE to allow direct HTTP
+    if (bleEnabled && !deviceConnected && oldDeviceConnected) {
         delay(500);
-        pServer->startAdvertising();
-        Serial.println("BLE: Advertising restarted");
+        Serial.println("Phone disconnected - fully disabling BLE");
+        BLEDevice::deinit(false);  // Deinit but keep memory
+        btStop();  // Stop Bluetooth controller completely
+        bleEnabled = false;
+        beepBleOff();
         oldDeviceConnected = deviceConnected;
     }
     if (deviceConnected && !oldDeviceConnected) {
@@ -765,8 +1136,7 @@ void loop() {
     }
 
     // Update sensor reading every 2 seconds when phone is connected
-    // Skip if paused (during HTTP requests to avoid BLE/WiFi radio conflict)
-    if (deviceConnected && !pauseSensorUpdates && (millis() - lastSensorUpdate >= 2000)) {
+    if (bleEnabled && deviceConnected && !pauseSensorUpdates && (millis() - lastSensorUpdate >= 2000)) {
         lastSensorUpdate = millis();
         updateSensorReading();
     }
@@ -857,26 +1227,37 @@ void loop() {
         }
         lastTapTime = now;
 
-        // Triple tap triggers immediately
-        if (tapCount >= 3) {
-            Serial.println("\n*** TRIPLE TAP! ***");
-            notifyPhone("Triple tap!");
-            scanAndSendNetworks();
+        // 4-tap triggers BLE toggle immediately
+        if (tapCount >= 4) {
+            if (!bleEnabled) {
+                Serial.println("\n*** 4-TAP: ENABLING BLE ***");
+                btStart();  // Start Bluetooth controller
+                setupBLE();
+                bleEnabled = true;
+                beepBleOn();
+            } else {
+                Serial.println("\n*** 4-TAP: DISABLING BLE ***");
+                BLEDevice::deinit(false);
+                btStop();
+                bleEnabled = false;
+                beepBleOff();
+            }
             tapCount = 0;
             lastTapTime = 0;
         }
     }
 
-    // Check for timeout to trigger single or double tap
-    if (tapCount > 0 && tapCount < 3 && (millis() - lastTapTime) >= TAP_WINDOW) {
+    // Check for timeout to trigger single, double, or triple tap
+    if (tapCount > 0 && tapCount < 4 && (millis() - lastTapTime) >= TAP_WINDOW) {
         if (tapCount == 1) {
             Serial.println("\n*** SINGLE TAP! ***");
-            notifyPhone("Single tap!");
             sendReading("Single");
         } else if (tapCount == 2) {
             Serial.println("\n*** DOUBLE TAP! ***");
-            notifyPhone("Double tap!");
             sendReading("Double");
+        } else if (tapCount == 3) {
+            Serial.println("\n*** TRIPLE TAP! ***");
+            sendReading("Scan");
         }
         tapCount = 0;
     }

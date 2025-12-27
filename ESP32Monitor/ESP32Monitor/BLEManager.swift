@@ -274,14 +274,17 @@ extension BLEManager: CBPeripheralDelegate {
         }
 
         // Parse the JSON from ESP32 and add the API key
-        guard var jsonData = jsonPayload.data(using: .utf8),
+        guard let jsonData = jsonPayload.data(using: .utf8),
               var jsonDict = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
             addLog("Invalid JSON from ESP32")
             return
         }
 
-        // Add the API key
+        // Add the API key and connection type
         jsonDict["apiKey"] = sfApiKey
+        jsonDict["connectionType"] = "Phone"
+
+        // GPS coordinates come from ESP32 if available (latitude, longitude already in jsonDict)
 
         guard let finalData = try? JSONSerialization.data(withJSONObject: jsonDict) else {
             addLog("Failed to create JSON")

@@ -20,6 +20,28 @@ espressif/
 - **Board**: ESP32-DevKitC-32E
 - **Chip**: ESP32-WROOM-32E (dual-core 240MHz, WiFi + BT)
 - **USB**: CP210x USB-to-serial
+- **Cellular**: Botletics SIM7000A (LTE CAT-M1/NB-IoT + GPS)
+- **SIM**: Hologram IoT SIM
+
+### SIM7000A Wiring
+
+| SIM7000A | ESP32 | Notes |
+|----------|-------|-------|
+| TX | GPIO16 | Modem TX → ESP32 RX |
+| RX | GPIO17 | ESP32 TX → Modem RX |
+| VIN | 5V | Power |
+| GND | GND | Ground |
+| PWRKEY | GPIO26 | Power control |
+
+### GPIO Pin Usage
+
+- GPIO0: Boot button (multi-tap)
+- GPIO4: Touch sensor
+- GPIO16: Modem RX (Serial2)
+- GPIO17: Modem TX (Serial2)
+- GPIO25: Buzzer (PWM)
+- GPIO26: Modem PWRKEY
+- GPIO34: Soil moisture sensor (ADC)
 
 ## ESP32 Development
 
@@ -54,17 +76,30 @@ REST endpoint for sensor readings.
 {
   "temperature": 72.5,
   "humidity": 45.0,
-  "deviceId": "ESP32-001"
+  "deviceId": "ESP32-001",
+  "function": "Single",
+  "connectionType": "WiFi",
+  "latitude": 37.774929,
+  "longitude": -122.419418,
+  "apiKey": "LawnMonitor2024SecretKey"
 }
 ```
 
-**Headers required:**
-- `X-API-Key: LawnMonitor2024SecretKey`
-- `Content-Type: application/json`
-
 ### Objects
 
-- **Sensor_Reading__c**: Stores sensor data (Temperature__c, Humidity__c, Device_Id__c, Reading_Timestamp__c)
+- **Sensor_Reading__c** fields:
+  - Temperature__c, Humidity__c
+  - Device_Id__c, Function__c
+  - Latitude__c, Longitude__c
+  - Connection_Type__c (Phone/WiFi/Cellular)
+  - Reading_Timestamp__c
+
+## Connection Priority
+
+Data is sent using the first available method:
+1. **Phone** - BLE relay to iOS app (requires 4-tap to enable BLE)
+2. **WiFi** - Direct HTTP POST
+3. **Cellular** - LTE via SIM7000A (fallback)
 
 ## Setup
 
