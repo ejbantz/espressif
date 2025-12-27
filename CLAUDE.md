@@ -43,7 +43,7 @@ const char* WIFI_PASSWORD = "your-password";
 
 - **Alias**: agentforce
 - **Site**: EJ_Dev (path: vforcesite)
-- **API Endpoint**: `https://ejdevhelpcenter-developer-edition.develop.my.site.com/vforcesite/services/apexrest/sensor/reading`
+- **API Endpoint**: `https://ejdev-dev-ed.develop.my.site.com/vforcesite/services/apexrest/sensor/reading`
 
 ### SensorDataAPI
 

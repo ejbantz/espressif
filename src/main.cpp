@@ -8,6 +8,7 @@
 #include <BLE2902.h>
 #include <Preferences.h>
 #include "esp_coexist.h"
+#include "esp_wifi.h"
 #include "credentials.h"
 
 // BLE Configuration
@@ -47,6 +48,7 @@ void beepBleConnect();  // Forward declaration
 void beepBleDisconnect();
 void beepWifiConnect();
 void beepFail();
+void setupBLE();
 
 class MyServerCallbacks: public BLEServerCallbacks {
     void onConnect(BLEServer* pServer) {
@@ -101,9 +103,12 @@ class WifiCredCallbacks: public BLECharacteristicCallbacks {
 };
 
 void notifyPhone(const char* status) {
-    if (deviceConnected && pStatusChar) {
+    if (pStatusChar) {
+        // Always update value so phone sees it when reconnecting
         pStatusChar->setValue(status);
-        pStatusChar->notify();
+        if (deviceConnected) {
+            pStatusChar->notify();
+        }
     }
 }
 
@@ -511,89 +516,35 @@ void connectWiFi() {
     updateWifiStatus();
 }
 
-bool sendToSalesforce(float temperature, float humidity, const char* function) {
-    // Stop BLE completely to free the radio for WiFi
-    bool wasConnected = deviceConnected;
-    Serial.println("Pausing BLE for HTTP...");
-    BLEDevice::stopAdvertising();
-    if (wasConnected && pServer) {
-        pServer->disconnect(pServer->getConnId());
-    }
-    delay(500);  // Wait for BLE to fully stop
+// BLE characteristic for sending data to phone for Salesforce posting
+BLECharacteristic* pSalesforceChar = NULL;
+#define SALESFORCE_CHAR_UUID "e5c2f8a6-1b3d-4e5f-9a7c-8d6b5e4f3a21"
 
-    // Reconnect WiFi if needed
-    if (WiFi.status() != WL_CONNECTED) {
-        Serial.println("WiFi dropped, reconnecting...");
-        WiFi.reconnect();
-        int attempts = 0;
-        while (WiFi.status() != WL_CONNECTED && attempts < 20) {
-            delay(250);
-            attempts++;
-        }
-        if (WiFi.status() != WL_CONNECTED) {
-            Serial.println("WiFi reconnect failed");
-            BLEDevice::startAdvertising();
-            return false;
-        }
-        Serial.println("WiFi reconnected");
+void sendToPhone(float temperature, float humidity, const char* function) {
+    // Send data to phone via BLE - phone will POST to Salesforce
+    if (!deviceConnected || !pSalesforceChar) {
+        Serial.println("Phone not connected, cannot send");
+        notifyPhone("No phone connection");
+        beepFail();
+        return;
     }
 
-    // Log WiFi status
-    Serial.print("WiFi RSSI: ");
-    Serial.print(WiFi.RSSI());
-    Serial.print(" dBm, IP: ");
-    Serial.println(WiFi.localIP());
-
-    // Use fresh client for each request to avoid stale SSL state
-    WiFiClientSecure secureClient;
-    secureClient.setInsecure();
-
-    HTTPClient http;
-    http.setTimeout(10000);
-    http.begin(secureClient, SF_ENDPOINT);
-    http.addHeader("Content-Type", "application/json");
-
+    // Create JSON payload for phone to POST
     String payload = "{";
     payload += "\"temperature\":" + String(temperature, 1) + ",";
     payload += "\"humidity\":" + String(humidity, 1) + ",";
     payload += "\"deviceId\":\"" + String(DEVICE_ID) + "\",";
-    payload += "\"function\":\"" + String(function) + "\",";
-    payload += "\"apiKey\":\"" + String(SF_API_KEY) + "\"";
+    payload += "\"function\":\"" + String(function) + "\"";
     payload += "}";
 
-    Serial.println("Sending to Salesforce...");
+    Serial.println("Sending to phone for Salesforce POST:");
     Serial.println(payload);
 
-    // Single attempt - BLE is stopped so should work
-    int httpCode = http.POST(payload);
-    bool success = false;
+    pSalesforceChar->setValue(payload.c_str());
+    pSalesforceChar->notify();
 
-    if (httpCode > 0) {
-        String response = http.getString();
-        Serial.print("Response (");
-        Serial.print(httpCode);
-        Serial.print("): ");
-        Serial.println(response);
-
-        if (httpCode == 200 || httpCode == 201) {
-            success = true;
-        } else {
-            Serial.print("SF Error: ");
-            Serial.println(response);
-        }
-    } else {
-        String errStr = http.errorToString(httpCode);
-        Serial.print("HTTP Error: ");
-        Serial.println(errStr);
-    }
-
-    http.end();
-
-    // Resume BLE advertising
-    Serial.println("Resuming BLE...");
-    BLEDevice::startAdvertising();
-
-    return success;
+    notifyPhone("Sent to phone");
+    beepSuccess();
 }
 
 void setupBLE() {
@@ -653,6 +604,14 @@ void setupBLE() {
     );
     pSensorChar->addDescriptor(new BLE2902());
     pSensorChar->setValue("--");
+
+    // Salesforce POST characteristic - sends data to phone for posting
+    pSalesforceChar = pService->createCharacteristic(
+        SALESFORCE_CHAR_UUID,
+        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY
+    );
+    pSalesforceChar->addDescriptor(new BLE2902());
+    pSalesforceChar->setValue("{}");
 
     pService->start();
 
@@ -747,133 +706,24 @@ void sendReading(const char* function) {
 
     // Notify phone what we're sending
     char statusMsg[100];
-    snprintf(statusMsg, sizeof(statusMsg), "Sending %s: %.1fF, Moisture %.0f%%", function, temp, humidity);
+    snprintf(statusMsg, sizeof(statusMsg), "Reading: %.1fF, %.0f%%", temp, humidity);
     notifyPhone(statusMsg);
 
-    if (sendToSalesforce(temp, humidity, function)) {
-        Serial.println("Success!");
-        notifyPhone("Salesforce: Success!");
-        beepSuccess();
-    } else {
-        Serial.println("Failed to send");
-        notifyPhone("Salesforce: Failed!");
-        beepFail();
-    }
+    // Send to phone via BLE - phone will POST to Salesforce
+    sendToPhone(temp, humidity, function);
 }
 
 void scanAndSendNetworks() {
-    Serial.println("\n--- Scanning WiFi Networks ---");
+    Serial.println("\n--- Triple Tap: WiFi Scan ---");
 
-    // Stop BLE FIRST so WiFi scan has full radio access
-    bool wasConnected = deviceConnected;
-    Serial.println("Pausing BLE for scan + HTTP...");
-    BLEDevice::stopAdvertising();
-    if (wasConnected && pServer) {
-        pServer->disconnect(pServer->getConnId());
-    }
-    delay(500);
+    // Just send a scan reading to Salesforce via phone
+    float tempC = temperatureRead();
+    float temp = (tempC * 9.0 / 5.0) + 32.0;
+    int moistureRaw = analogRead(34);
+    float moisture = 0;  // Simple read for scan
 
-    int numNetworks = WiFi.scanNetworks();
-    Serial.print("Found ");
-    Serial.print(numNetworks);
-    Serial.println(" networks");
-
-    char scanMsg[50];
-    snprintf(scanMsg, sizeof(scanMsg), "Found %d networks", numNetworks);
-    Serial.println(scanMsg);
-
-    // Build networks JSON array
-    String networks = "[";
-    for (int i = 0; i < numNetworks && i < 20; i++) {  // Limit to 20 networks
-        if (i > 0) networks += ",";
-        networks += "{\"ssid\":\"";
-        networks += WiFi.SSID(i);
-        networks += "\",\"rssi\":";
-        networks += WiFi.RSSI(i);
-        networks += ",\"channel\":";
-        networks += WiFi.channel(i);
-        networks += ",\"encryption\":\"";
-        switch (WiFi.encryptionType(i)) {
-            case WIFI_AUTH_OPEN: networks += "Open"; break;
-            case WIFI_AUTH_WEP: networks += "WEP"; break;
-            case WIFI_AUTH_WPA_PSK: networks += "WPA"; break;
-            case WIFI_AUTH_WPA2_PSK: networks += "WPA2"; break;
-            case WIFI_AUTH_WPA_WPA2_PSK: networks += "WPA/WPA2"; break;
-            case WIFI_AUTH_WPA2_ENTERPRISE: networks += "WPA2-Enterprise"; break;
-            default: networks += "Unknown"; break;
-        }
-        networks += "\"}";
-
-        Serial.print("  ");
-        Serial.print(WiFi.SSID(i));
-        Serial.print(" (");
-        Serial.print(WiFi.RSSI(i));
-        Serial.println(" dBm)");
-    }
-    networks += "]";
-
-    WiFi.scanDelete();
-
-    // Send to Salesforce - reconnect WiFi if needed
-    if (WiFi.status() != WL_CONNECTED) {
-        Serial.println("WiFi dropped, reconnecting...");
-        WiFi.reconnect();
-        int attempts = 0;
-        while (WiFi.status() != WL_CONNECTED && attempts < 20) {
-            delay(250);
-            attempts++;
-        }
-        if (WiFi.status() != WL_CONNECTED) {
-            Serial.println("WiFi reconnect failed");
-            BLEDevice::startAdvertising();
-            return;
-        }
-        Serial.println("WiFi reconnected");
-    }
-
-    // Use fresh client for each request to avoid stale SSL state
-    WiFiClientSecure secureClient;
-    secureClient.setInsecure();
-
-    HTTPClient http;
-    http.setTimeout(10000);
-    http.begin(secureClient, SF_ENDPOINT);
-    http.addHeader("Content-Type", "application/json");
-
-    String payload = "{";
-    payload += "\"deviceId\":\"" + String(DEVICE_ID) + "\",";
-    payload += "\"function\":\"Scan\",";
-    payload += "\"networks\":" + networks + ",";
-    payload += "\"apiKey\":\"" + String(SF_API_KEY) + "\"";
-    payload += "}";
-
-    Serial.println("Sending network scan to Salesforce...");
-
-    int httpCode = http.POST(payload);
-    bool success = false;
-
-    if (httpCode > 0) {
-        String response = http.getString();
-        Serial.print("Response (");
-        Serial.print(httpCode);
-        Serial.print("): ");
-        Serial.println(response);
-        if (httpCode == 200 || httpCode == 201) {
-            success = true;
-            beepSuccess();
-        }
-    } else {
-        String errStr = http.errorToString(httpCode);
-        Serial.print("HTTP Error: ");
-        Serial.println(errStr);
-        beepFail();
-    }
-
-    http.end();
-
-    // Resume BLE advertising
-    Serial.println("Resuming BLE...");
-    BLEDevice::startAdvertising();
+    notifyPhone("Triple tap - scanning");
+    sendToPhone(temp, moisture, "Scan");
 }
 
 void updateSensorReading() {

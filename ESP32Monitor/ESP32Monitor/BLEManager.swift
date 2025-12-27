@@ -12,12 +12,17 @@ struct WiFiNetwork: Identifiable, Codable {
 class BLEManager: NSObject, ObservableObject {
     // UUIDs matching the ESP32
     let serviceUUID = CBUUID(string: "4fafc201-1fb5-459e-8fcc-c5c9c331914b")
-    let buttonCharUUID = CBUUID(string: "beb5483e-36e1-4688-b   7f5-ea07361b26a8")
+    let buttonCharUUID = CBUUID(string: "beb5483e-36e1-4688-b7f5-ea07361b26a8")
     let statusCharUUID = CBUUID(string: "1c95d5e3-d8f7-413a-bf3d-7a2e5d7be87e")
     let wifiScanCharUUID = CBUUID(string: "a1e8f5d2-7b3c-4e9a-8f2d-6c5b4a3d2e1f")
     let wifiCredCharUUID = CBUUID(string: "b2f9e6c3-8c4d-5f0b-9e3e-7d6c5b4a3f20")
     let wifiStatusCharUUID = CBUUID(string: "c3a0f7d4-9d5e-6f1c-0a4f-8e7d6c5b4a31")
     let sensorCharUUID = CBUUID(string: "d4b1e8f5-0e6f-7a2d-1b5a-9f8e7d6c5b42")
+    let salesforceCharUUID = CBUUID(string: "e5c2f8a6-1b3d-4e5f-9a7c-8d6b5e4f3a21")
+
+    // Salesforce API config
+    let sfEndpoint = "https://ejdev-dev-ed.develop.my.site.com/vforcesite/services/apexrest/sensor/reading"
+    let sfApiKey = "LawnMonitor2024SecretKey"
 
     private var centralManager: CBCentralManager!
     private var esp32Peripheral: CBPeripheral?
@@ -27,6 +32,7 @@ class BLEManager: NSObject, ObservableObject {
     private var wifiCredCharacteristic: CBCharacteristic?
     private var wifiStatusCharacteristic: CBCharacteristic?
     private var sensorCharacteristic: CBCharacteristic?
+    private var salesforceCharacteristic: CBCharacteristic?
 
     @Published var isScanning = false
     @Published var isConnected = false
@@ -184,7 +190,7 @@ extension BLEManager: CBPeripheralDelegate {
         for service in services {
             if service.uuid == serviceUUID {
                 addLog("Found ESP32 service")
-                peripheral.discoverCharacteristics([buttonCharUUID, statusCharUUID, wifiScanCharUUID, wifiCredCharUUID, wifiStatusCharUUID, sensorCharUUID], for: service)
+                peripheral.discoverCharacteristics([buttonCharUUID, statusCharUUID, wifiScanCharUUID, wifiCredCharUUID, wifiStatusCharUUID, sensorCharUUID, salesforceCharUUID], for: service)
             }
         }
     }
@@ -226,6 +232,11 @@ extension BLEManager: CBPeripheralDelegate {
                 peripheral.readValue(for: characteristic)
                 addLog("Sensor ready")
             }
+            if characteristic.uuid == salesforceCharUUID {
+                salesforceCharacteristic = characteristic
+                peripheral.setNotifyValue(true, for: characteristic)
+                addLog("Salesforce relay ready")
+            }
         }
     }
 
@@ -247,8 +258,58 @@ extension BLEManager: CBPeripheralDelegate {
                 self.wifiConnectionStatus = value
             } else if characteristic.uuid == self.sensorCharUUID {
                 self.sensorReading = value
+            } else if characteristic.uuid == self.salesforceCharUUID {
+                // Received data from ESP32 to post to Salesforce
+                self.postToSalesforce(jsonPayload: value)
             }
         }
+    }
+
+    private func postToSalesforce(jsonPayload: String) {
+        addLog("Posting to Salesforce...")
+
+        guard let url = URL(string: sfEndpoint) else {
+            addLog("Invalid SF URL")
+            return
+        }
+
+        // Parse the JSON from ESP32 and add the API key
+        guard var jsonData = jsonPayload.data(using: .utf8),
+              var jsonDict = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
+            addLog("Invalid JSON from ESP32")
+            return
+        }
+
+        // Add the API key
+        jsonDict["apiKey"] = sfApiKey
+
+        guard let finalData = try? JSONSerialization.data(withJSONObject: jsonDict) else {
+            addLog("Failed to create JSON")
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = finalData
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            DispatchQueue.main.async {
+                if let error = error {
+                    self?.addLog("SF Error: \(error.localizedDescription)")
+                    return
+                }
+
+                if let httpResponse = response as? HTTPURLResponse {
+                    if httpResponse.statusCode == 200 || httpResponse.statusCode == 201 {
+                        self?.addLog("SF: Success!")
+                    } else {
+                        let responseStr = data.flatMap { String(data: $0, encoding: .utf8) } ?? "No response"
+                        self?.addLog("SF Error \(httpResponse.statusCode): \(responseStr)")
+                    }
+                }
+            }
+        }.resume()
     }
 
     private func parseWifiNetworks(_ json: String) {

@@ -1,10 +1,12 @@
 import SwiftUI
+import UIKit
 
 struct ContentView: View {
     @StateObject private var bleManager = BLEManager()
     @State private var selectedNetwork: WiFiNetwork?
     @State private var showPasswordSheet = false
     @State private var wifiPassword = ""
+    @State private var showCopiedFeedback = false
 
     var body: some View {
         NavigationView {
@@ -247,9 +249,35 @@ struct ContentView: View {
 
                 // Log
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Activity Log")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                    HStack {
+                        Text("Activity Log")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Button(action: {
+                            bleManager.statusLog.removeAll()
+                        }) {
+                            Label("Clear", systemImage: "trash")
+                                .font(.caption)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+
+                        Button(action: {
+                            let logText = bleManager.statusLog.joined(separator: "\n")
+                            UIPasteboard.general.string = logText
+                            showCopiedFeedback = true
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                                showCopiedFeedback = false
+                            }
+                        }) {
+                            Label(showCopiedFeedback ? "Copied!" : "Copy", systemImage: showCopiedFeedback ? "checkmark" : "doc.on.doc")
+                                .font(.caption)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .tint(showCopiedFeedback ? .green : nil)
+                    }
 
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 4) {
