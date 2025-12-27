@@ -2,9 +2,13 @@ import SwiftUI
 
 struct ContentView: View {
     @StateObject private var bleManager = BLEManager()
+    @State private var selectedNetwork: WiFiNetwork?
+    @State private var showPasswordSheet = false
+    @State private var wifiPassword = ""
 
     var body: some View {
         NavigationView {
+            ScrollView {
             VStack(spacing: 20) {
                 // Connection Status Card
                 VStack(spacing: 12) {
@@ -68,26 +72,68 @@ struct ContentView: View {
                 .cornerRadius(12)
                 .shadow(radius: 2)
 
-                // Button State Card
-                VStack(spacing: 8) {
-                    Text("Button State")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                // Device Info Card
+                VStack(spacing: 12) {
+                    // WiFi Status
+                    HStack {
+                        Image(systemName: bleManager.wifiConnectionStatus == "Disconnected" || bleManager.wifiConnectionStatus == "Unknown" ? "wifi.slash" : "wifi")
+                            .font(.title2)
+                            .foregroundColor(bleManager.wifiConnectionStatus == "Disconnected" || bleManager.wifiConnectionStatus == "Unknown" ? .red : .green)
+                            .frame(width: 30)
+                        VStack(alignment: .leading) {
+                            Text("WiFi")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Text(bleManager.wifiConnectionStatus)
+                                .font(.subheadline)
+                                .fontWeight(.medium)
+                        }
+                        Spacer()
+                    }
+                    .padding(12)
+                    .background(Color(.systemGray6))
+                    .cornerRadius(8)
 
+                    // Sensor Reading
+                    HStack {
+                        Image(systemName: "drop.fill")
+                            .font(.title2)
+                            .foregroundColor(.cyan)
+                            .frame(width: 30)
+                        VStack(alignment: .leading) {
+                            Text("Temp | Moisture")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Text(bleManager.sensorReading)
+                                .font(.title3)
+                                .fontWeight(.semibold)
+                        }
+                        Spacer()
+                    }
+                    .padding(12)
+                    .background(Color(.systemGray6))
+                    .cornerRadius(8)
+
+                    // Button State
                     HStack {
                         Image(systemName: bleManager.buttonState == "PRESSED" ? "button.programmable" : "button.programmable.square")
-                            .font(.system(size: 40))
+                            .font(.title2)
                             .foregroundColor(bleManager.buttonState == "PRESSED" ? .orange : .gray)
-
-                        Text(bleManager.buttonState)
-                            .font(.system(size: 32, weight: .bold, design: .rounded))
-                            .foregroundColor(bleManager.buttonState == "PRESSED" ? .orange : .primary)
+                            .frame(width: 30)
+                        VStack(alignment: .leading) {
+                            Text("Button")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Text(bleManager.buttonState)
+                                .font(.subheadline)
+                                .fontWeight(.medium)
+                        }
+                        Spacer()
                     }
-                    .padding()
-                    .frame(maxWidth: .infinity)
+                    .padding(12)
                     .background(
-                        RoundedRectangle(cornerRadius: 12)
-                            .fill(bleManager.buttonState == "PRESSED" ? Color.orange.opacity(0.1) : Color(.systemGray6))
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(bleManager.buttonState == "PRESSED" ? Color.orange.opacity(0.2) : Color(.systemGray6))
                     )
                 }
                 .padding()
@@ -112,6 +158,92 @@ struct ContentView: View {
                 .background(Color(.systemBackground))
                 .cornerRadius(12)
                 .shadow(radius: 2)
+
+                // WiFi Configuration Card
+                if bleManager.isConnected {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Text("WiFi Configuration")
+                                .font(.headline)
+                            Spacer()
+                            if bleManager.isWifiScanning {
+                                ProgressView()
+                                    .scaleEffect(0.8)
+                            }
+                        }
+
+                        Button(action: { bleManager.scanWifiNetworks() }) {
+                            Label("Scan Networks", systemImage: "wifi")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(bleManager.isWifiScanning)
+
+                        if !bleManager.wifiNetworks.isEmpty {
+                            ForEach(bleManager.wifiNetworks) { network in
+                                HStack {
+                                    Button(action: {
+                                        if network.open {
+                                            bleManager.sendWifiCredentials(ssid: network.ssid, password: "")
+                                        } else {
+                                            selectedNetwork = network
+                                            wifiPassword = ""
+                                            showPasswordSheet = true
+                                        }
+                                    }) {
+                                        HStack {
+                                            Image(systemName: wifiIcon(for: network.rssi))
+                                                .foregroundColor(.blue)
+                                            VStack(alignment: .leading) {
+                                                Text(network.ssid)
+                                                    .foregroundColor(.primary)
+                                                HStack(spacing: 4) {
+                                                    if network.open {
+                                                        Text("Open")
+                                                            .font(.caption2)
+                                                            .foregroundColor(.green)
+                                                    }
+                                                    if network.saved {
+                                                        Text("Saved")
+                                                            .font(.caption2)
+                                                            .foregroundColor(.orange)
+                                                    }
+                                                    Text("\(network.rssi) dBm")
+                                                        .font(.caption2)
+                                                        .foregroundColor(.secondary)
+                                                }
+                                            }
+                                            Spacer()
+                                            if !network.open {
+                                                Image(systemName: "lock.fill")
+                                                    .foregroundColor(.secondary)
+                                                    .font(.caption)
+                                            }
+                                        }
+                                    }
+                                    .buttonStyle(.plain)
+
+                                    if network.saved {
+                                        Button(action: {
+                                            bleManager.forgetNetwork(ssid: network.ssid)
+                                        }) {
+                                            Image(systemName: "xmark.circle.fill")
+                                                .foregroundColor(.red)
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                }
+                                .padding(10)
+                                .background(Color(.systemGray6))
+                                .cornerRadius(8)
+                            }
+                        }
+                    }
+                    .padding()
+                    .background(Color(.systemBackground))
+                    .cornerRadius(12)
+                    .shadow(radius: 2)
+                }
 
                 // Log
                 VStack(alignment: .leading, spacing: 8) {
@@ -138,11 +270,65 @@ struct ContentView: View {
                 .cornerRadius(12)
                 .shadow(radius: 2)
 
-                Spacer()
             }
             .padding()
+            }
             .background(Color(.systemGroupedBackground))
-            .navigationTitle("ESP32 Monitor")
+            .navigationTitle("EJTEST Monitor")
+        }
+        .sheet(isPresented: $showPasswordSheet) {
+            NavigationView {
+                VStack(spacing: 20) {
+                    Text("Enter password for")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    Text(selectedNetwork?.ssid ?? "")
+                        .font(.headline)
+
+                    SecureField("Password", text: $wifiPassword)
+                        .textFieldStyle(.roundedBorder)
+                        .padding(.horizontal)
+
+                    Button(action: {
+                        if let network = selectedNetwork {
+                            bleManager.sendWifiCredentials(ssid: network.ssid, password: wifiPassword)
+                        }
+                        showPasswordSheet = false
+                    }) {
+                        Text("Connect")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .padding(.horizontal)
+                    .disabled(wifiPassword.isEmpty)
+
+                    Spacer()
+                }
+                .padding(.top, 30)
+                .navigationTitle("WiFi Password")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") {
+                            showPasswordSheet = false
+                        }
+                    }
+                }
+            }
+            .presentationDetents([.medium])
+        }
+    }
+
+    private func wifiIcon(for rssi: Int) -> String {
+        switch rssi {
+        case -50...0:
+            return "wifi"
+        case -70..<(-50):
+            return "wifi"
+        case -80..<(-70):
+            return "wifi.exclamationmark"
+        default:
+            return "wifi.slash"
         }
     }
 }

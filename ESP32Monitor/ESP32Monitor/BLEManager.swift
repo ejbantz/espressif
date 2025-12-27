@@ -1,16 +1,32 @@
 import Foundation
 import CoreBluetooth
 
+struct WiFiNetwork: Identifiable, Codable {
+    var id: String { ssid }
+    let ssid: String
+    let rssi: Int
+    let open: Bool
+    let saved: Bool
+}
+
 class BLEManager: NSObject, ObservableObject {
     // UUIDs matching the ESP32
     let serviceUUID = CBUUID(string: "4fafc201-1fb5-459e-8fcc-c5c9c331914b")
-    let buttonCharUUID = CBUUID(string: "beb5483e-36e1-4688-b7f5-ea07361b26a8")
+    let buttonCharUUID = CBUUID(string: "beb5483e-36e1-4688-b   7f5-ea07361b26a8")
     let statusCharUUID = CBUUID(string: "1c95d5e3-d8f7-413a-bf3d-7a2e5d7be87e")
+    let wifiScanCharUUID = CBUUID(string: "a1e8f5d2-7b3c-4e9a-8f2d-6c5b4a3d2e1f")
+    let wifiCredCharUUID = CBUUID(string: "b2f9e6c3-8c4d-5f0b-9e3e-7d6c5b4a3f20")
+    let wifiStatusCharUUID = CBUUID(string: "c3a0f7d4-9d5e-6f1c-0a4f-8e7d6c5b4a31")
+    let sensorCharUUID = CBUUID(string: "d4b1e8f5-0e6f-7a2d-1b5a-9f8e7d6c5b42")
 
     private var centralManager: CBCentralManager!
     private var esp32Peripheral: CBPeripheral?
     private var buttonCharacteristic: CBCharacteristic?
     private var statusCharacteristic: CBCharacteristic?
+    private var wifiScanCharacteristic: CBCharacteristic?
+    private var wifiCredCharacteristic: CBCharacteristic?
+    private var wifiStatusCharacteristic: CBCharacteristic?
+    private var sensorCharacteristic: CBCharacteristic?
 
     @Published var isScanning = false
     @Published var isConnected = false
@@ -18,6 +34,10 @@ class BLEManager: NSObject, ObservableObject {
     @Published var statusMessage = "Not connected"
     @Published var statusLog: [String] = []
     @Published var discoveredDevices: [CBPeripheral] = []
+    @Published var wifiNetworks: [WiFiNetwork] = []
+    @Published var isWifiScanning = false
+    @Published var wifiConnectionStatus = "Unknown"
+    @Published var sensorReading = "--"
 
     override init() {
         super.init()
@@ -52,6 +72,51 @@ class BLEManager: NSObject, ObservableObject {
     func disconnect() {
         if let peripheral = esp32Peripheral {
             centralManager.cancelPeripheralConnection(peripheral)
+        }
+    }
+
+    func scanWifiNetworks() {
+        guard let characteristic = wifiScanCharacteristic,
+              let peripheral = esp32Peripheral else {
+            addLog("WiFi scan not available")
+            return
+        }
+        isWifiScanning = true
+        wifiNetworks = []
+        let data = "SCAN".data(using: .utf8)!
+        peripheral.writeValue(data, for: characteristic, type: .withResponse)
+        addLog("Requested WiFi scan...")
+    }
+
+    func sendWifiCredentials(ssid: String, password: String) {
+        guard let characteristic = wifiCredCharacteristic,
+              let peripheral = esp32Peripheral else {
+            addLog("Cannot send credentials")
+            return
+        }
+        let credentials = "\(ssid):\(password)"
+        let data = credentials.data(using: .utf8)!
+        peripheral.writeValue(data, for: characteristic, type: .withResponse)
+        addLog("Sent credentials for \(ssid)")
+    }
+
+    func forgetNetwork(ssid: String) {
+        guard let characteristic = wifiCredCharacteristic,
+              let peripheral = esp32Peripheral else {
+            addLog("Cannot forget network")
+            return
+        }
+        let command = "FORGET:\(ssid)"
+        let data = command.data(using: .utf8)!
+        peripheral.writeValue(data, for: characteristic, type: .withResponse)
+        addLog("Forgetting \(ssid)")
+
+        // Remove from local list
+        wifiNetworks = wifiNetworks.map { network in
+            if network.ssid == ssid {
+                return WiFiNetwork(ssid: network.ssid, rssi: network.rssi, open: network.open, saved: false)
+            }
+            return network
         }
     }
 
@@ -100,6 +165,9 @@ extension BLEManager: CBCentralManagerDelegate {
         isConnected = false
         buttonState = "Unknown"
         statusMessage = "Disconnected"
+        wifiNetworks = []
+        wifiConnectionStatus = "Unknown"
+        sensorReading = "--"
         addLog("Disconnected")
     }
 
@@ -116,7 +184,7 @@ extension BLEManager: CBPeripheralDelegate {
         for service in services {
             if service.uuid == serviceUUID {
                 addLog("Found ESP32 service")
-                peripheral.discoverCharacteristics([buttonCharUUID, statusCharUUID], for: service)
+                peripheral.discoverCharacteristics([buttonCharUUID, statusCharUUID, wifiScanCharUUID, wifiCredCharUUID, wifiStatusCharUUID, sensorCharUUID], for: service)
             }
         }
     }
@@ -137,6 +205,27 @@ extension BLEManager: CBPeripheralDelegate {
                 peripheral.readValue(for: characteristic)
                 addLog("Subscribed to status updates")
             }
+            if characteristic.uuid == wifiScanCharUUID {
+                wifiScanCharacteristic = characteristic
+                peripheral.setNotifyValue(true, for: characteristic)
+                addLog("WiFi config ready")
+            }
+            if characteristic.uuid == wifiCredCharUUID {
+                wifiCredCharacteristic = characteristic
+                addLog("WiFi credentials ready")
+            }
+            if characteristic.uuid == wifiStatusCharUUID {
+                wifiStatusCharacteristic = characteristic
+                peripheral.setNotifyValue(true, for: characteristic)
+                peripheral.readValue(for: characteristic)
+                addLog("WiFi status ready")
+            }
+            if characteristic.uuid == sensorCharUUID {
+                sensorCharacteristic = characteristic
+                peripheral.setNotifyValue(true, for: characteristic)
+                peripheral.readValue(for: characteristic)
+                addLog("Sensor ready")
+            }
         }
     }
 
@@ -151,7 +240,29 @@ extension BLEManager: CBPeripheralDelegate {
             } else if characteristic.uuid == self.statusCharUUID {
                 self.statusMessage = value
                 self.addLog("Status: \(value)")
+            } else if characteristic.uuid == self.wifiScanCharUUID {
+                self.isWifiScanning = false
+                self.parseWifiNetworks(value)
+            } else if characteristic.uuid == self.wifiStatusCharUUID {
+                self.wifiConnectionStatus = value
+            } else if characteristic.uuid == self.sensorCharUUID {
+                self.sensorReading = value
             }
+        }
+    }
+
+    private func parseWifiNetworks(_ json: String) {
+        guard let data = json.data(using: .utf8) else {
+            addLog("Failed to parse WiFi data")
+            return
+        }
+
+        do {
+            let networks = try JSONDecoder().decode([WiFiNetwork].self, from: data)
+            wifiNetworks = networks.sorted { $0.rssi > $1.rssi }
+            addLog("Found \(networks.count) WiFi networks")
+        } catch {
+            addLog("JSON parse error: \(error.localizedDescription)")
         }
     }
 }
