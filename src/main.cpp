@@ -1043,6 +1043,16 @@ void setup() {
     // Connect WiFi first
     connectWiFi();
 
+    // Initialize cellular modem (for GPS and cellular fallback)
+    Serial.println("\nInitializing cellular modem...");
+    if (initModem()) {
+        Serial.println("Modem ready - GPS enabled");
+        // Try to get initial GPS fix
+        updateGPS();
+    } else {
+        Serial.println("Modem init failed - check wiring and press PWR button");
+    }
+
     // BLE stays OFF by default for reliable direct HTTP
     // User can 4-tap to enable BLE for phone configuration
     Serial.println("BLE disabled - 4-tap to enable");
