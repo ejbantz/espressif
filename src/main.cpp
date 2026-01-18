@@ -1142,7 +1142,7 @@ void setup() {
     Serial.println();
     Serial.println("================================");
     Serial.println("ESP32 Salesforce IoT Device");
-    Serial.println("OTA Update Test - v1.2");
+    Serial.println("OTA Enabled");
     Serial.println("================================");
     Serial.println("Single tap  = Send reading");
     Serial.println("Double tap  = Send reading");
