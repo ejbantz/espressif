@@ -7,6 +7,7 @@
 #include <BLEUtils.h>
 #include <BLE2902.h>
 #include <Preferences.h>
+#include <ArduinoOTA.h>
 #include "esp_coexist.h"
 #include "esp_wifi.h"
 #include "credentials.h"
@@ -1164,6 +1165,28 @@ void setup() {
     // Connect WiFi first
     connectWiFi();
 
+    // Setup OTA updates
+    ArduinoOTA.setHostname("ESP32-Sensor");
+    ArduinoOTA.onStart([]() {
+        Serial.println("OTA Update starting...");
+    });
+    ArduinoOTA.onEnd([]() {
+        Serial.println("\nOTA Update complete!");
+    });
+    ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+        Serial.printf("OTA Progress: %u%%\r", (progress / (total / 100)));
+    });
+    ArduinoOTA.onError([](ota_error_t error) {
+        Serial.printf("OTA Error[%u]: ", error);
+        if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
+        else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
+        else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
+        else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
+        else if (error == OTA_END_ERROR) Serial.println("End Failed");
+    });
+    ArduinoOTA.begin();
+    Serial.println("OTA updates enabled");
+
     // Initialize cellular modem (for GPS and cellular fallback)
     Serial.println("\nInitializing cellular modem...");
     if (initModem()) {
@@ -1311,6 +1334,9 @@ void updateSensorReading() {
 }
 
 void loop() {
+    // Handle OTA updates
+    ArduinoOTA.handle();
+
     static unsigned long lastTapTime = 0;
     static int tapCount = 0;
     static bool lastButtonState = HIGH;
