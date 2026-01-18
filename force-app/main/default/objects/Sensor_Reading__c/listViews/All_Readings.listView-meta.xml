@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ListView xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>All_Readings</fullName>
+    <columns>NAME</columns>
+    <columns>Device_Id__c</columns>
+    <columns>Function__c</columns>
+    <columns>Reading_Timestamp__c</columns>
+    <columns>Connection_Type__c</columns>
+    <columns>Temperature__c</columns>
+    <columns>Humidity__c</columns>
+    <columns>Battery_Voltage__c</columns>
+    <columns>Signal_Quality__c</columns>
+    <columns>Latitude__c</columns>
+    <columns>Longitude__c</columns>
+    <columns>Local_IP__c</columns>
+    <columns>Public_IP__c</columns>
+    <columns>CREATED_DATE</columns>
+    <filterScope>Everything</filterScope>
+    <label>All Readings</label>
+</ListView>

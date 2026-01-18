@@ -28,14 +28,13 @@ espressif/
 
 | SIM7000A | ESP32 | Notes |
 |----------|-------|-------|
-| D10 (TX) | GPIO17 | Modem TX → ESP32 RX |
-| D11 (RX) | GPIO16 | ESP32 TX → Modem RX |
-| 5V | 3.3V | Logic level (required!) |
-| SDA | GPIO21 | I2C for MCP9808 temp sensor |
-| SCL | GPIO22 | I2C clock |
+| D6 (PWRKEY) | GPIO26 | Modem power control |
+| D10 (TX) | GPIO16 | Modem TX → ESP32 RX |
+| D11 (RX) | GPIO17 | ESP32 TX → Modem RX |
+| 5V/LOGIC | 5V | Charges LiPo when USB connected |
 | GND | GND | Ground |
 
-**Power**: SIM7000A requires 3.7V LiPo battery. Connect ESP32 3.3V → SIM7000A 5V pin for logic levels.
+**Power**: LiPo battery connected to SIM7000A JST connector powers both modem and ESP32 (via HT7333 LDO regulator to ESP32 3.3V pin). ESP32 5V pin → Shield 5V/LOGIC enables battery charging when USB connected.
 
 **Baud**: Modem communicates at 57600 baud.
 
@@ -43,11 +42,10 @@ espressif/
 
 - GPIO0: Boot button (multi-tap)
 - GPIO4: Touch sensor
-- GPIO16: Modem TX (Serial2)
-- GPIO17: Modem RX (Serial2)
-- GPIO21: I2C SDA (MCP9808)
-- GPIO22: I2C SCL (MCP9808)
+- GPIO16: Modem RX (Serial2)
+- GPIO17: Modem TX (Serial2)
 - GPIO25: Buzzer (PWM)
+- GPIO26: Modem PWRKEY
 - GPIO34: Soil moisture sensor (ADC)
 
 ## ESP32 Development
@@ -120,3 +118,72 @@ Data is sent using the first available method:
 ```bash
 sf project deploy start --source-dir force-app -o agentforce
 ```
+
+## OTA Firmware Updates
+
+The device supports over-the-air firmware updates from Salesforce. User triggers update by 5-tap on the boot button.
+
+### Button Commands
+
+- **1-tap**: Send sensor reading
+- **2-tap**: Send sensor reading
+- **3-tap**: Scan WiFi networks
+- **4-tap**: Toggle BLE (wait for timeout)
+- **5-tap**: Check for firmware update (immediate)
+
+### Firmware Version
+
+Current version is defined in `src/main.cpp`:
+```cpp
+const char* FIRMWARE_VERSION = "1.0.0";
+```
+
+### Salesforce Components
+
+- **FirmwareAPI**: REST endpoint at `/sensor/firmware` returns version and download URL
+- **Firmware_Config__mdt**: Custom metadata stores current version number
+- **ESP32_Firmware**: Static resource contains the firmware.bin file
+
+### Releasing a New Firmware Version
+
+1. **Update version** in `src/main.cpp`:
+   ```cpp
+   const char* FIRMWARE_VERSION = "1.0.1";
+   ```
+
+2. **Build firmware**:
+   ```bash
+   pio run
+   ```
+
+3. **Copy to static resources**:
+   ```bash
+   cp .pio/build/esp32dev/firmware.bin force-app/main/default/staticresources/ESP32_Firmware.bin
+   ```
+
+4. **Deploy to Salesforce**:
+   ```bash
+   sf project deploy start --source-dir force-app/main/default/staticresources -o agentforce
+   ```
+
+5. **Update version in Salesforce**:
+   - Setup → Custom Metadata Types → Firmware Config → Manage Records
+   - Edit "ESP32_Sensor" record
+   - Change Firmware_Version__c to match (e.g., "1.0.1")
+   - Save
+
+### Device Update Process
+
+When user 5-taps:
+1. Device calls `/sensor/firmware?apiKey=...` to get current version
+2. Compares server version to local `FIRMWARE_VERSION`
+3. If newer, downloads .bin from static resource URL
+4. Flashes firmware and reboots
+
+### OTA via Local Network
+
+For development, ArduinoOTA is also enabled:
+```bash
+pio run -t upload -e esp32dev_ota
+```
+Requires ESP32 on same network. IP configured in `platformio.ini`.

@@ -8,6 +8,7 @@
 #include <BLE2902.h>
 #include <Preferences.h>
 #include <ArduinoOTA.h>
+#include <HTTPUpdate.h>
 #include "esp_coexist.h"
 #include "esp_wifi.h"
 #include "credentials.h"
@@ -22,7 +23,7 @@
 // Try swapping if no response
 #define MODEM_TX 16  // ESP32 TX → Shield D11 (modem RX)
 #define MODEM_RX 17  // ESP32 RX ← Shield D10 (modem TX)
-// #define MODEM_PWRKEY 26  // Optional - comment out if not wired, press PWR button manually
+#define MODEM_PWRKEY 26  // GPIO26 connected to shield D6 (PWRKEY)
 #define SerialAT Serial2
 
 // Hologram APN
@@ -50,8 +51,10 @@ String networkOperator = "";
 
 // Forward declarations for Salesforce config
 extern const char* SF_ENDPOINT;
+extern const char* SF_FIRMWARE_ENDPOINT;
 extern const char* SF_API_KEY;
 extern const char* DEVICE_ID;
+extern const char* FIRMWARE_VERSION;
 
 // BLE Configuration
 #define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
@@ -281,6 +284,138 @@ void beepCellular() {
     playTone(600, 40);
     delay(30);
     playTone(800, 60);
+}
+
+void beepUpdateStart() {
+    // Ascending tones - update starting
+    playTone(400, 100);
+    delay(50);
+    playTone(600, 100);
+    delay(50);
+    playTone(800, 100);
+}
+
+void beepUpdateSuccess() {
+    // Happy melody - update succeeded
+    playTone(523, 100);  // C
+    delay(50);
+    playTone(659, 100);  // E
+    delay(50);
+    playTone(784, 200);  // G
+}
+
+// Check for firmware update from Salesforce and apply if available
+void checkAndUpdateFirmware() {
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("OTA: WiFi not connected, cannot check for updates");
+        beepFail();
+        return;
+    }
+
+    Serial.println("\n=== Checking for Firmware Update ===");
+    Serial.print("Current version: ");
+    Serial.println(FIRMWARE_VERSION);
+
+    // Build the firmware check URL
+    String url = String(SF_FIRMWARE_ENDPOINT) + "?apiKey=" + SF_API_KEY;
+
+    HTTPClient http;
+    http.begin(url);
+    http.setTimeout(15000);
+
+    int httpCode = http.GET();
+
+    if (httpCode != 200) {
+        Serial.print("OTA: Failed to check firmware, HTTP code: ");
+        Serial.println(httpCode);
+        http.end();
+        beepFail();
+        return;
+    }
+
+    String payload = http.getString();
+    http.end();
+
+    Serial.print("OTA: Response: ");
+    Serial.println(payload);
+
+    // Parse JSON response to get version and download URL
+    // Handle both escaped and unescaped JSON
+    // Expected: {"success":true,"version":"1.0.1","downloadUrl":"https://..."}
+
+    // Remove escape characters if present
+    payload.replace("\\\"", "\"");
+    payload.replace("\\\\", "\\");
+
+    // Remove outer quotes if present (Salesforce sometimes wraps response)
+    if (payload.startsWith("\"") && payload.endsWith("\"")) {
+        payload = payload.substring(1, payload.length() - 1);
+    }
+
+    // Simple JSON parsing (find version field)
+    int versionStart = payload.indexOf("version\":\"");
+    if (versionStart < 0) {
+        Serial.println("OTA: Could not find version in response");
+        beepFail();
+        return;
+    }
+    versionStart += 10;  // Move past 'version":"'
+    int versionEnd = payload.indexOf("\"", versionStart);
+    String serverVersion = payload.substring(versionStart, versionEnd);
+
+    int urlStart = payload.indexOf("downloadUrl\":\"");
+    if (urlStart < 0) {
+        Serial.println("OTA: Could not find downloadUrl in response");
+        beepFail();
+        return;
+    }
+    urlStart += 14;  // Move past 'downloadUrl":"'
+    int urlEnd = payload.indexOf("\"", urlStart);
+    String downloadUrl = payload.substring(urlStart, urlEnd);
+
+    Serial.print("OTA: Server version: ");
+    Serial.println(serverVersion);
+    Serial.print("OTA: Download URL: ");
+    Serial.println(downloadUrl);
+
+    // Compare versions
+    if (serverVersion == FIRMWARE_VERSION) {
+        Serial.println("OTA: Already on latest version");
+        // Two short beeps - already up to date
+        beep(100);
+        delay(100);
+        beep(100);
+        return;
+    }
+
+    Serial.println("OTA: New version available! Starting update...");
+    beepUpdateStart();
+
+    // Perform HTTP OTA update
+    WiFiClient otaClient;
+
+    t_httpUpdate_return ret = httpUpdate.update(otaClient, downloadUrl);
+
+    switch (ret) {
+        case HTTP_UPDATE_FAILED:
+            Serial.printf("OTA: Update failed. Error (%d): %s\n",
+                         httpUpdate.getLastError(),
+                         httpUpdate.getLastErrorString().c_str());
+            beepFail();
+            break;
+
+        case HTTP_UPDATE_NO_UPDATES:
+            Serial.println("OTA: No update available");
+            beep(100);
+            break;
+
+        case HTTP_UPDATE_OK:
+            Serial.println("OTA: Update successful! Rebooting...");
+            beepUpdateSuccess();
+            delay(1000);
+            ESP.restart();
+            break;
+    }
 }
 
 // Modem power control (optional - press PWR button on SIM7000A board if not wired)
@@ -762,8 +897,12 @@ void performWifiScanForPhone() {
 
 // Salesforce API Configuration
 const char* SF_ENDPOINT = "https://ejdev-dev-ed.develop.my.site.com/vforcesite/services/apexrest/sensor/reading";
+const char* SF_FIRMWARE_ENDPOINT = "https://ejdev-dev-ed.develop.my.site.com/vforcesite/services/apexrest/sensor/firmware";
 const char* SF_API_KEY = "LawnMonitor2024SecretKey";
 const char* DEVICE_ID = "ESP32-001";
+
+// Firmware version - increment this when releasing new firmware
+const char* FIRMWARE_VERSION = "1.0.0";
 
 // Boot button on GPIO0
 const int BUTTON_PIN = 0;
@@ -1147,11 +1286,14 @@ void setup() {
     Serial.println();
     Serial.println("================================");
     Serial.println("ESP32 Salesforce IoT Device");
-    Serial.println("OTA Enabled");
+    Serial.print("Firmware version: ");
+    Serial.println(FIRMWARE_VERSION);
     Serial.println("================================");
-    Serial.println("Single tap  = Send reading");
-    Serial.println("Double tap  = Send reading");
-    Serial.println("Triple tap  = Scan WiFi networks");
+    Serial.println("1-tap = Send reading");
+    Serial.println("2-tap = Send reading");
+    Serial.println("3-tap = Scan WiFi networks");
+    Serial.println("4-tap = Toggle BLE");
+    Serial.println("5-tap = Check firmware update");
     Serial.println("Touch GPIO4 = Send reading");
     Serial.println("================================");
 
@@ -1469,8 +1611,29 @@ void loop() {
         }
         lastTapTime = now;
 
-        // 4-tap triggers BLE toggle immediately
-        if (tapCount >= 4) {
+        // 5-tap triggers firmware update check immediately
+        if (tapCount >= 5) {
+            Serial.println("\n*** 5-TAP: CHECKING FOR FIRMWARE UPDATE ***");
+            notifyPhone("Checking for update...");
+            checkAndUpdateFirmware();
+            tapCount = 0;
+            lastTapTime = 0;
+        }
+        // 4-tap waits for timeout (so user can continue to 5)
+    }
+
+    // Check for timeout to trigger actions
+    if (tapCount > 0 && (millis() - lastTapTime) >= TAP_WINDOW) {
+        if (tapCount == 1) {
+            Serial.println("\n*** SINGLE TAP! ***");
+            sendReading("Single");
+        } else if (tapCount == 2) {
+            Serial.println("\n*** DOUBLE TAP! ***");
+            sendReading("Double");
+        } else if (tapCount == 3) {
+            Serial.println("\n*** TRIPLE TAP! ***");
+            sendReading("Scan");
+        } else if (tapCount == 4) {
             if (!bleEnabled) {
                 Serial.println("\n*** 4-TAP: ENABLING BLE ***");
                 btStart();  // Start Bluetooth controller
@@ -1484,22 +1647,6 @@ void loop() {
                 bleEnabled = false;
                 beepBleOff();
             }
-            tapCount = 0;
-            lastTapTime = 0;
-        }
-    }
-
-    // Check for timeout to trigger single, double, or triple tap
-    if (tapCount > 0 && tapCount < 4 && (millis() - lastTapTime) >= TAP_WINDOW) {
-        if (tapCount == 1) {
-            Serial.println("\n*** SINGLE TAP! ***");
-            sendReading("Single");
-        } else if (tapCount == 2) {
-            Serial.println("\n*** DOUBLE TAP! ***");
-            sendReading("Double");
-        } else if (tapCount == 3) {
-            Serial.println("\n*** TRIPLE TAP! ***");
-            sendReading("Scan");
         }
         tapCount = 0;
     }
