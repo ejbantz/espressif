@@ -1142,6 +1142,7 @@ void setup() {
     Serial.println();
     Serial.println("================================");
     Serial.println("ESP32 Salesforce IoT Device");
+    Serial.println("OTA Update Test - v1.2");
     Serial.println("================================");
     Serial.println("Single tap  = Send reading");
     Serial.println("Double tap  = Send reading");
@@ -1165,8 +1166,12 @@ void setup() {
     // Connect WiFi first
     connectWiFi();
 
+    // Disable WiFi power saving for reliable OTA
+    WiFi.setSleep(false);
+
     // Setup OTA updates
     ArduinoOTA.setHostname("ESP32-Sensor");
+    ArduinoOTA.setPort(3232);
     ArduinoOTA.onStart([]() {
         Serial.println("OTA Update starting...");
     });
