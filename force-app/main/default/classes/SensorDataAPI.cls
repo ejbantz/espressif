@@ -54,6 +54,23 @@ global with sharing class SensorDataAPI {
                 Decimal.valueOf(String.valueOf(body.get('gpsSpeed'))) : null;
             reading.Network_Operator__c = body.containsKey('networkOperator') ?
                 String.valueOf(body.get('networkOperator')) : null;
+            reading.Local_IP__c = body.containsKey('localIP') ?
+                String.valueOf(body.get('localIP')) : null;
+
+            // Capture public IP from request headers
+            String publicIP = req.headers.get('X-Forwarded-For');
+            if (String.isBlank(publicIP)) {
+                publicIP = req.headers.get('X-Salesforce-SIP');
+            }
+            if (String.isBlank(publicIP)) {
+                publicIP = req.headers.get('True-Client-IP');
+            }
+            // X-Forwarded-For may contain multiple IPs, take the first one
+            if (String.isNotBlank(publicIP) && publicIP.contains(',')) {
+                publicIP = publicIP.split(',')[0].trim();
+            }
+            reading.Public_IP__c = publicIP;
+
             reading.Reading_Timestamp__c = DateTime.now();
 
             insert reading;

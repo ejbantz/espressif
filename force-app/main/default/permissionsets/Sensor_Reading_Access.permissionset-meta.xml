@@ -76,6 +76,16 @@
         <field>Sensor_Reading__c.Network_Operator__c</field>
         <readable>true</readable>
     </fieldPermissions>
+    <fieldPermissions>
+        <editable>true</editable>
+        <field>Sensor_Reading__c.Local_IP__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>true</editable>
+        <field>Sensor_Reading__c.Public_IP__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
     <hasActivationRequired>false</hasActivationRequired>
     <label>Sensor Reading Access</label>
     <objectPermissions>

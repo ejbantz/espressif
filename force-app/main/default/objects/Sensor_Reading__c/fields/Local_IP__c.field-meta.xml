@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Local_IP__c</fullName>
+    <label>Local IP</label>
+    <type>Text</type>
+    <length>45</length>
+    <required>false</required>
+    <description>Local network IP address of the device</description>
+    <inlineHelpText>The device IP on its local network (e.g., 192.168.x.x)</inlineHelpText>
+</CustomField>

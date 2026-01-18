@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Public_IP__c</fullName>
+    <label>Public IP</label>
+    <type>Text</type>
+    <length>45</length>
+    <required>false</required>
+    <description>Public IP address the request came from</description>
+    <inlineHelpText>The external IP address visible to Salesforce</inlineHelpText>
+</CustomField>

@@ -96,6 +96,7 @@ void beepBleDisconnect();
 void beepWifiConnect();
 void beepFail();
 void setupBLE();
+void sendReading(const char* function);
 
 class MyServerCallbacks: public BLEServerCallbacks {
     void onConnect(BLEServer* pServer) {
@@ -522,6 +523,9 @@ bool sendViaCellular(float temperature, float humidity, const char* function) {
     payload += "\"deviceId\":\"" + String(DEVICE_ID) + "\",";
     payload += "\"function\":\"" + String(function) + "\",";
     payload += "\"connectionType\":\"Cellular\",";
+    if (WiFi.status() == WL_CONNECTED) {
+        payload += "\"localIP\":\"" + WiFi.localIP().toString() + "\",";
+    }
     if (gpsValid) {
         payload += "\"latitude\":" + String(gpsLatitude, 6) + ",";
         payload += "\"longitude\":" + String(gpsLongitude, 6) + ",";
@@ -858,7 +862,6 @@ void connectWiFi() {
                     Serial.print("IP Address: ");
                     Serial.println(WiFi.localIP());
                     WiFi.scanDelete();
-                    postConnectionStatus(savedSSID.c_str(), false);
                     beepWifiConnect();
                     updateWifiStatus();
                     return;
@@ -887,7 +890,6 @@ void connectWiFi() {
                 Serial.print("IP Address: ");
                 Serial.println(WiFi.localIP());
                 WiFi.scanDelete();
-                postConnectionStatus(ssid.c_str(), true);
                 beepWifiConnect();
                 updateWifiStatus();
                 return;
@@ -904,7 +906,6 @@ void connectWiFi() {
         Serial.println("WiFi Connected!");
         Serial.print("IP Address: ");
         Serial.println(WiFi.localIP());
-        postConnectionStatus(WIFI_SSID, false);
         beepWifiConnect();
     } else {
         Serial.println("WiFi Connection FAILED");
@@ -943,6 +944,7 @@ bool sendDirectToSalesforce(float temperature, float humidity, const char* funct
     payload += "\"deviceId\":\"" + String(DEVICE_ID) + "\",";
     payload += "\"function\":\"" + String(function) + "\",";
     payload += "\"connectionType\":\"WiFi\",";
+    payload += "\"localIP\":\"" + WiFi.localIP().toString() + "\",";
     if (gpsValid) {
         payload += "\"latitude\":" + String(gpsLatitude, 6) + ",";
         payload += "\"longitude\":" + String(gpsLongitude, 6) + ",";
@@ -990,6 +992,9 @@ void sendSensorData(float temperature, float humidity, const char* function) {
         payload += "\"humidity\":" + String(humidity, 1) + ",";
         payload += "\"deviceId\":\"" + String(DEVICE_ID) + "\",";
         payload += "\"function\":\"" + String(function) + "\"";
+        if (WiFi.status() == WL_CONNECTED) {
+            payload += ",\"localIP\":\"" + WiFi.localIP().toString() + "\"";
+        }
         if (gpsValid) {
             payload += ",\"latitude\":" + String(gpsLatitude, 6);
             payload += ",\"longitude\":" + String(gpsLongitude, 6);
@@ -1205,6 +1210,13 @@ void setup() {
     // BLE stays OFF by default for reliable direct HTTP
     // User can 4-tap to enable BLE for phone configuration
     Serial.println("BLE disabled - 4-tap to enable");
+
+    // Send startup reading with all available data
+    Serial.println("\n--- Sending startup status to Salesforce ---");
+    if (modemInitialized) {
+        updateModemDiagnostics();
+    }
+    sendReading("Startup");
 }
 
 int readSoilMoisture() {
