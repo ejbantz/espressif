@@ -21,26 +21,33 @@ espressif/
 - **Chip**: ESP32-WROOM-32E (dual-core 240MHz, WiFi + BT)
 - **USB**: CP210x USB-to-serial
 - **Cellular**: Botletics SIM7000A (LTE CAT-M1/NB-IoT + GPS)
+- **Temperature**: MCP9808 I2C sensor (on SIM7000A shield)
 - **SIM**: Hologram IoT SIM
 
 ### SIM7000A Wiring
 
 | SIM7000A | ESP32 | Notes |
 |----------|-------|-------|
-| TX | GPIO16 | Modem TX → ESP32 RX |
-| RX | GPIO17 | ESP32 TX → Modem RX |
-| VIN | 5V | Power |
+| D10 (TX) | GPIO17 | Modem TX → ESP32 RX |
+| D11 (RX) | GPIO16 | ESP32 TX → Modem RX |
+| 5V | 3.3V | Logic level (required!) |
+| SDA | GPIO21 | I2C for MCP9808 temp sensor |
+| SCL | GPIO22 | I2C clock |
 | GND | GND | Ground |
-| PWRKEY | GPIO26 | Power control |
+
+**Power**: SIM7000A requires 3.7V LiPo battery. Connect ESP32 3.3V → SIM7000A 5V pin for logic levels.
+
+**Baud**: Modem communicates at 57600 baud.
 
 ### GPIO Pin Usage
 
 - GPIO0: Boot button (multi-tap)
 - GPIO4: Touch sensor
-- GPIO16: Modem RX (Serial2)
-- GPIO17: Modem TX (Serial2)
+- GPIO16: Modem TX (Serial2)
+- GPIO17: Modem RX (Serial2)
+- GPIO21: I2C SDA (MCP9808)
+- GPIO22: I2C SCL (MCP9808)
 - GPIO25: Buzzer (PWM)
-- GPIO26: Modem PWRKEY
 - GPIO34: Soil moisture sensor (ADC)
 
 ## ESP32 Development

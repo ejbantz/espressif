@@ -7,18 +7,26 @@
 #include <BLEUtils.h>
 #include <BLE2902.h>
 #include <Preferences.h>
+#include <Wire.h>
+#include <Adafruit_MCP9808.h>
 #include "esp_coexist.h"
 #include "esp_wifi.h"
 #include "credentials.h"
+
+// MCP9808 temperature sensor on SIM7000A shield (I2C)
+Adafruit_MCP9808 tempSensor = Adafruit_MCP9808();
+bool tempSensorAvailable = false;
 
 // TinyGSM for SIM7000A cellular modem
 #define TINY_GSM_MODEM_SIM7000
 #define TINY_GSM_RX_BUFFER 1024
 #include <TinyGsmClient.h>
 
-// SIM7000A pins
-#define MODEM_TX 17  // ESP32 TX → Modem RX
-#define MODEM_RX 16  // Modem TX → ESP32 RX
+// SIM7000A pins - ACTIVE CONFIG
+// Per Botletics wiki: D10=modem TX, D11=modem RX
+// Try swapping if no response
+#define MODEM_TX 16  // ESP32 TX → Shield D11 (modem RX)
+#define MODEM_RX 17  // ESP32 RX ← Shield D10 (modem TX)
 // #define MODEM_PWRKEY 26  // Optional - comment out if not wired, press PWR button manually
 #define SerialAT Serial2
 
@@ -292,17 +300,23 @@ bool initModem() {
     if (modemInitialized) return true;
 
     Serial.println("Initializing SIM7000A modem...");
-    SerialAT.begin(9600, SERIAL_8N1, MODEM_RX, MODEM_TX);
-    delay(3000);
+
+    // SIM7000A responds at 57600 baud
+    // Note: ESP32 3.3V must be connected to SIM7000A 5V pin for logic levels
+    SerialAT.begin(57600, SERIAL_8N1, MODEM_RX, MODEM_TX);
+    delay(1000);
+
+    // Flush any garbage
+    while (SerialAT.available()) SerialAT.read();
 
     modemPowerOn();
-    delay(5000);
+    delay(3000);
 
-    Serial.println("Testing modem communication...");
+    Serial.println("Testing modem with TinyGSM...");
     if (!modem.testAT()) {
         Serial.println("Modem not responding, trying again...");
         modemPowerOn();
-        delay(5000);
+        delay(3000);
         if (!modem.testAT()) {
             Serial.println("Modem failed to respond");
             return false;
@@ -1040,6 +1054,16 @@ void setup() {
     // Startup chime
     beepStartup();
 
+    // Initialize I2C for MCP9808 temperature sensor
+    Wire.begin(21, 22);  // SDA=GPIO21, SCL=GPIO22
+    if (tempSensor.begin(0x18)) {  // Default I2C address
+        tempSensorAvailable = true;
+        tempSensor.setResolution(3);  // 0.0625°C resolution
+        Serial.println("MCP9808 temperature sensor found!");
+    } else {
+        Serial.println("MCP9808 not found - using internal temp");
+    }
+
     // Connect WiFi first
     connectWiFi();
 
@@ -1077,9 +1101,16 @@ float getMoisturePercent(int rawValue) {
 }
 
 void sendReading(const char* function) {
-    // Read internal chip temperature (Celsius) and convert to Fahrenheit
-    float tempC = temperatureRead();
-    float temp = (tempC * 9.0 / 5.0) + 32.0;
+    // Read temperature in Fahrenheit
+    float temp;
+    if (tempSensorAvailable) {
+        tempSensor.wake();  // Wake from low power mode
+        temp = tempSensor.readTempF();
+        tempSensor.shutdown_wake(1);  // Back to low power
+    } else {
+        float tempC = temperatureRead();  // Fallback to ESP32 internal
+        temp = (tempC * 9.0 / 5.0) + 32.0;
+    }
 
     // Read soil moisture sensor
     int moistureRaw = readSoilMoisture();
@@ -1120,8 +1151,15 @@ void scanAndSendNetworks() {
     Serial.println("\n--- Triple Tap: WiFi Scan ---");
 
     // Just send a scan reading to Salesforce via phone
-    float tempC = temperatureRead();
-    float temp = (tempC * 9.0 / 5.0) + 32.0;
+    float temp;
+    if (tempSensorAvailable) {
+        tempSensor.wake();
+        temp = tempSensor.readTempF();
+        tempSensor.shutdown_wake(1);
+    } else {
+        float tempC = temperatureRead();
+        temp = (tempC * 9.0 / 5.0) + 32.0;
+    }
     int moistureRaw = analogRead(34);
     float moisture = 0;  // Simple read for scan
 
@@ -1170,8 +1208,15 @@ void updateCellStatus() {
 
 void updateSensorReading() {
     // Read sensors and update BLE characteristic (doesn't post to Salesforce)
-    float tempC = temperatureRead();
-    float temp = (tempC * 9.0 / 5.0) + 32.0;
+    float temp;
+    if (tempSensorAvailable) {
+        tempSensor.wake();
+        temp = tempSensor.readTempF();
+        tempSensor.shutdown_wake(1);
+    } else {
+        float tempC = temperatureRead();
+        temp = (tempC * 9.0 / 5.0) + 32.0;
+    }
     int moistureRaw = readSoilMoisture();
     float moisture = getMoisturePercent(moistureRaw);
 
