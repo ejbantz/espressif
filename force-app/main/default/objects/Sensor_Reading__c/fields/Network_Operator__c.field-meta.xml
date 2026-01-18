@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Network_Operator__c</fullName>
+    <label>Network Operator</label>
+    <type>Text</type>
+    <length>50</length>
+    <required>false</required>
+    <description>Cellular network operator name</description>
+    <inlineHelpText>Carrier name (e.g., T-Mobile, AT&amp;T, Hologram)</inlineHelpText>
+</CustomField>

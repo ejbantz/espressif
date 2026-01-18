@@ -42,6 +42,18 @@ global with sharing class SensorDataAPI {
                 Decimal.valueOf(String.valueOf(body.get('longitude'))) : null;
             reading.Connection_Type__c = body.containsKey('connectionType') ?
                 String.valueOf(body.get('connectionType')) : null;
+            reading.Battery_Voltage__c = body.containsKey('batteryVoltage') ?
+                Decimal.valueOf(String.valueOf(body.get('batteryVoltage'))) : null;
+            reading.Signal_Quality__c = body.containsKey('signalQuality') ?
+                Decimal.valueOf(String.valueOf(body.get('signalQuality'))) : null;
+            reading.GPS_Satellites__c = body.containsKey('gpsSatellites') ?
+                Decimal.valueOf(String.valueOf(body.get('gpsSatellites'))) : null;
+            reading.GPS_Altitude__c = body.containsKey('gpsAltitude') ?
+                Decimal.valueOf(String.valueOf(body.get('gpsAltitude'))) : null;
+            reading.GPS_Speed__c = body.containsKey('gpsSpeed') ?
+                Decimal.valueOf(String.valueOf(body.get('gpsSpeed'))) : null;
+            reading.Network_Operator__c = body.containsKey('networkOperator') ?
+                String.valueOf(body.get('networkOperator')) : null;
             reading.Reading_Timestamp__c = DateTime.now();
 
             insert reading;

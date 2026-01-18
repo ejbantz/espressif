@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>GPS_Altitude__c</fullName>
+    <label>GPS Altitude</label>
+    <type>Number</type>
+    <precision>7</precision>
+    <scale>2</scale>
+    <required>false</required>
+    <description>Altitude in meters from GPS</description>
+    <inlineHelpText>Altitude above sea level in meters</inlineHelpText>
+</CustomField>

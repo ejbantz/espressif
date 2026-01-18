@@ -7,15 +7,9 @@
 #include <BLEUtils.h>
 #include <BLE2902.h>
 #include <Preferences.h>
-#include <Wire.h>
-#include <Adafruit_MCP9808.h>
 #include "esp_coexist.h"
 #include "esp_wifi.h"
 #include "credentials.h"
-
-// MCP9808 temperature sensor on SIM7000A shield (I2C)
-Adafruit_MCP9808 tempSensor = Adafruit_MCP9808();
-bool tempSensorAvailable = false;
 
 // TinyGSM for SIM7000A cellular modem
 #define TINY_GSM_MODEM_SIM7000
@@ -43,7 +37,15 @@ bool modemInitialized = false;
 // GPS data
 float gpsLatitude = 0.0;
 float gpsLongitude = 0.0;
+float gpsAltitude = 0.0;
+float gpsSpeed = 0.0;
+int gpsSatellites = 0;
 bool gpsValid = false;
+
+// Modem diagnostics
+int batteryVoltage = 0;    // millivolts
+int signalQuality = 99;    // CSQ (0-31, 99=unknown)
+String networkOperator = "";
 
 // Forward declarations for Salesforce config
 extern const char* SF_ENDPOINT;
@@ -396,37 +398,102 @@ bool updateGPS() {
     Serial.print("GPS raw: ");
     Serial.println(gpsData);
 
-    // Parse fields
+    // Parse fields (CGNSINF has up to 18 fields)
     int commaIndex = 0;
-    String fields[10];
+    String fields[20];
     int fieldCount = 0;
     int lastIndex = 0;
 
-    for (int i = 0; i < gpsData.length() && fieldCount < 10; i++) {
+    for (int i = 0; i < gpsData.length() && fieldCount < 20; i++) {
         if (gpsData.charAt(i) == ',') {
             fields[fieldCount++] = gpsData.substring(lastIndex, i);
             lastIndex = i + 1;
         }
     }
-    if (lastIndex < gpsData.length() && fieldCount < 10) {
+    if (lastIndex < gpsData.length() && fieldCount < 20) {
         fields[fieldCount++] = gpsData.substring(lastIndex);
     }
 
+    // CGNSINF format: run,fix,date,time,lat,lon,alt,speed,course,fixmode,reserved,HDOP,PDOP,VDOP,reserved,sats,HPA,VPA
     // Field 1 = fix status (1 = valid fix)
     if (fieldCount >= 6 && fields[1] == "1") {
         gpsLatitude = fields[3].toFloat();
         gpsLongitude = fields[4].toFloat();
+        if (fieldCount > 5) gpsAltitude = fields[5].toFloat();
+        if (fieldCount > 6) gpsSpeed = fields[6].toFloat();
+        if (fieldCount > 14) gpsSatellites = fields[14].toInt();
         gpsValid = true;
         Serial.print("GPS: ");
         Serial.print(gpsLatitude, 6);
         Serial.print(", ");
-        Serial.println(gpsLongitude, 6);
+        Serial.print(gpsLongitude, 6);
+        Serial.print(" Alt:");
+        Serial.print(gpsAltitude);
+        Serial.print("m Sats:");
+        Serial.println(gpsSatellites);
         return true;
     }
 
     gpsValid = false;
     Serial.println("No GPS fix yet");
     return false;
+}
+
+// Read battery voltage from SIM7000A
+void updateBatteryVoltage() {
+    if (!modemInitialized) return;
+
+    // AT+CBC returns: +CBC: 0,percent,voltage
+    modem.sendAT("+CBC");
+    if (modem.waitResponse(5000L, "+CBC:") == 1) {
+        String response = SerialAT.readStringUntil('\n');
+        // Parse voltage (third field after commas)
+        int firstComma = response.indexOf(',');
+        int secondComma = response.indexOf(',', firstComma + 1);
+        if (secondComma > 0) {
+            batteryVoltage = response.substring(secondComma + 1).toInt();
+            Serial.print("Battery: ");
+            Serial.print(batteryVoltage);
+            Serial.println("mV");
+        }
+    }
+}
+
+// Read signal quality (CSQ)
+void updateSignalQuality() {
+    if (!modemInitialized) return;
+
+    signalQuality = modem.getSignalQuality();
+    Serial.print("Signal CSQ: ");
+    Serial.println(signalQuality);
+}
+
+// Read network operator name
+void updateNetworkOperator() {
+    if (!modemInitialized) return;
+
+    // AT+COPS? returns: +COPS: mode,format,"operator",AcT
+    modem.sendAT("+COPS?");
+    if (modem.waitResponse(5000L, "+COPS:") == 1) {
+        String response = SerialAT.readStringUntil('\n');
+        int firstQuote = response.indexOf('"');
+        int secondQuote = response.indexOf('"', firstQuote + 1);
+        if (firstQuote >= 0 && secondQuote > firstQuote) {
+            networkOperator = response.substring(firstQuote + 1, secondQuote);
+            Serial.print("Operator: ");
+            Serial.println(networkOperator);
+        }
+    }
+}
+
+// Update all modem diagnostics
+void updateModemDiagnostics() {
+    if (!modemInitialized) return;
+
+    updateBatteryVoltage();
+    updateSignalQuality();
+    updateNetworkOperator();
+    updateGPS();
 }
 
 // Send data via cellular HTTP
@@ -441,13 +508,13 @@ bool sendViaCellular(float temperature, float humidity, const char* function) {
         if (!connectCellular()) return false;
     }
 
-    // Try to get GPS fix
-    updateGPS();
+    // Update all diagnostics
+    updateModemDiagnostics();
 
     Serial.println("Sending via cellular HTTP...");
     beepCellular();
 
-    // Build JSON payload
+    // Build JSON payload with diagnostics
     String payload = "{";
     payload += "\"temperature\":" + String(temperature, 1) + ",";
     payload += "\"humidity\":" + String(humidity, 1) + ",";
@@ -457,6 +524,18 @@ bool sendViaCellular(float temperature, float humidity, const char* function) {
     if (gpsValid) {
         payload += "\"latitude\":" + String(gpsLatitude, 6) + ",";
         payload += "\"longitude\":" + String(gpsLongitude, 6) + ",";
+        payload += "\"gpsAltitude\":" + String(gpsAltitude, 2) + ",";
+        payload += "\"gpsSpeed\":" + String(gpsSpeed, 2) + ",";
+        payload += "\"gpsSatellites\":" + String(gpsSatellites) + ",";
+    }
+    if (batteryVoltage > 0) {
+        payload += "\"batteryVoltage\":" + String(batteryVoltage) + ",";
+    }
+    if (signalQuality != 99) {
+        payload += "\"signalQuality\":" + String(signalQuality) + ",";
+    }
+    if (networkOperator.length() > 0) {
+        payload += "\"networkOperator\":\"" + networkOperator + "\",";
     }
     payload += "\"apiKey\":\"" + String(SF_API_KEY) + "\"";
     payload += "}";
@@ -846,9 +925,9 @@ bool sendDirectToSalesforce(float temperature, float humidity, const char* funct
 
     Serial.println("Sending direct to Salesforce via WiFi...");
 
-    // Try to get GPS if modem is available
+    // Update all modem diagnostics if available
     if (modemInitialized) {
-        updateGPS();
+        updateModemDiagnostics();
     }
 
     client.setInsecure();
@@ -866,6 +945,18 @@ bool sendDirectToSalesforce(float temperature, float humidity, const char* funct
     if (gpsValid) {
         payload += "\"latitude\":" + String(gpsLatitude, 6) + ",";
         payload += "\"longitude\":" + String(gpsLongitude, 6) + ",";
+        payload += "\"gpsAltitude\":" + String(gpsAltitude, 2) + ",";
+        payload += "\"gpsSpeed\":" + String(gpsSpeed, 2) + ",";
+        payload += "\"gpsSatellites\":" + String(gpsSatellites) + ",";
+    }
+    if (batteryVoltage > 0) {
+        payload += "\"batteryVoltage\":" + String(batteryVoltage) + ",";
+    }
+    if (signalQuality != 99) {
+        payload += "\"signalQuality\":" + String(signalQuality) + ",";
+    }
+    if (networkOperator.length() > 0) {
+        payload += "\"networkOperator\":\"" + networkOperator + "\",";
     }
     payload += "\"apiKey\":\"" + String(SF_API_KEY) + "\"";
     payload += "}";
@@ -888,9 +979,9 @@ bool sendDirectToSalesforce(float temperature, float humidity, const char* funct
 void sendSensorData(float temperature, float humidity, const char* function) {
     // Priority 1: Phone (BLE relay)
     if (bleEnabled && deviceConnected && pSalesforceChar) {
-        // Get GPS for phone to include in POST
+        // Get all diagnostics for phone to include in POST
         if (modemInitialized) {
-            updateGPS();
+            updateModemDiagnostics();
         }
 
         String payload = "{";
@@ -901,6 +992,18 @@ void sendSensorData(float temperature, float humidity, const char* function) {
         if (gpsValid) {
             payload += ",\"latitude\":" + String(gpsLatitude, 6);
             payload += ",\"longitude\":" + String(gpsLongitude, 6);
+            payload += ",\"gpsAltitude\":" + String(gpsAltitude, 2);
+            payload += ",\"gpsSpeed\":" + String(gpsSpeed, 2);
+            payload += ",\"gpsSatellites\":" + String(gpsSatellites);
+        }
+        if (batteryVoltage > 0) {
+            payload += ",\"batteryVoltage\":" + String(batteryVoltage);
+        }
+        if (signalQuality != 99) {
+            payload += ",\"signalQuality\":" + String(signalQuality);
+        }
+        if (networkOperator.length() > 0) {
+            payload += ",\"networkOperator\":\"" + networkOperator + "\"";
         }
         payload += "}";
 
@@ -1054,15 +1157,9 @@ void setup() {
     // Startup chime
     beepStartup();
 
-    // Initialize I2C for MCP9808 temperature sensor
-    Wire.begin(21, 22);  // SDA=GPIO21, SCL=GPIO22
-    if (tempSensor.begin(0x18)) {  // Default I2C address
-        tempSensorAvailable = true;
-        tempSensor.setResolution(3);  // 0.0625°C resolution
-        Serial.println("MCP9808 temperature sensor found!");
-    } else {
-        Serial.println("MCP9808 not found - using internal temp");
-    }
+    // Temperature sensor - using ESP32 internal temp
+    // (SIM7000A shield does not have MCP9808 populated)
+    Serial.println("Using ESP32 internal temperature sensor");
 
     // Connect WiFi first
     connectWiFi();
@@ -1101,16 +1198,9 @@ float getMoisturePercent(int rawValue) {
 }
 
 void sendReading(const char* function) {
-    // Read temperature in Fahrenheit
-    float temp;
-    if (tempSensorAvailable) {
-        tempSensor.wake();  // Wake from low power mode
-        temp = tempSensor.readTempF();
-        tempSensor.shutdown_wake(1);  // Back to low power
-    } else {
-        float tempC = temperatureRead();  // Fallback to ESP32 internal
-        temp = (tempC * 9.0 / 5.0) + 32.0;
-    }
+    // Read temperature in Fahrenheit (ESP32 internal sensor)
+    float tempC = temperatureRead();
+    float temp = (tempC * 9.0 / 5.0) + 32.0;
 
     // Read soil moisture sensor
     int moistureRaw = readSoilMoisture();
@@ -1151,15 +1241,8 @@ void scanAndSendNetworks() {
     Serial.println("\n--- Triple Tap: WiFi Scan ---");
 
     // Just send a scan reading to Salesforce via phone
-    float temp;
-    if (tempSensorAvailable) {
-        tempSensor.wake();
-        temp = tempSensor.readTempF();
-        tempSensor.shutdown_wake(1);
-    } else {
-        float tempC = temperatureRead();
-        temp = (tempC * 9.0 / 5.0) + 32.0;
-    }
+    float tempC = temperatureRead();
+    float temp = (tempC * 9.0 / 5.0) + 32.0;
     int moistureRaw = analogRead(34);
     float moisture = 0;  // Simple read for scan
 
@@ -1208,15 +1291,8 @@ void updateCellStatus() {
 
 void updateSensorReading() {
     // Read sensors and update BLE characteristic (doesn't post to Salesforce)
-    float temp;
-    if (tempSensorAvailable) {
-        tempSensor.wake();
-        temp = tempSensor.readTempF();
-        tempSensor.shutdown_wake(1);
-    } else {
-        float tempC = temperatureRead();
-        temp = (tempC * 9.0 / 5.0) + 32.0;
-    }
+    float tempC = temperatureRead();
+    float temp = (tempC * 9.0 / 5.0) + 32.0;
     int moistureRaw = readSoilMoisture();
     float moisture = getMoisturePercent(moistureRaw);
 

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Signal_Quality__c</fullName>
+    <label>Signal Quality</label>
+    <type>Number</type>
+    <precision>2</precision>
+    <scale>0</scale>
+    <required>false</required>
+    <description>Cellular signal quality (CSQ) from SIM7000A</description>
+    <inlineHelpText>CSQ value: 0-9 marginal, 10-14 OK, 15-19 good, 20-31 excellent, 99 unknown</inlineHelpText>
+</CustomField>

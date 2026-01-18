@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>GPS_Speed__c</fullName>
+    <label>GPS Speed</label>
+    <type>Number</type>
+    <precision>6</precision>
+    <scale>2</scale>
+    <required>false</required>
+    <description>Speed in km/h from GPS</description>
+    <inlineHelpText>Ground speed in kilometers per hour</inlineHelpText>
+</CustomField>
